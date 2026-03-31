@@ -30,7 +30,6 @@ function cfg(runtimeKey: keyof RuntimeConfig, viteKey: string): string {
 
 const getPoolId = () => cfg('cognitoUserPoolId', 'VITE_COGNITO_USER_POOL_ID');
 const getClientId = () => cfg('cognitoClientId', 'VITE_COGNITO_CLIENT_ID');
-const getRegion = () => cfg('cognitoRegion', 'VITE_COGNITO_REGION') || 'us-east-1';
 const getDomain = () => cfg('cognitoDomain', 'VITE_COGNITO_DOMAIN');
 
 export function isAuthEnabled(): boolean {

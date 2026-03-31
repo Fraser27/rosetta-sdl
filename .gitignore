@@ -27,8 +27,8 @@ neo4j_data/
 .env.local
 
 # CDK
-cdk/node_modules/
-cdk/cdk.out/
+cdk/
+.npm/
 
 # Test
 .pytest_cache/
