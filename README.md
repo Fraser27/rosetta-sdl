@@ -113,8 +113,8 @@ A **Neo4j knowledge graph** that unifies your entire data estate — tables, col
 ### 1. Start the services
 
 ```bash
-git clone <repo-url> aws-semantic-layer
-cd aws-semantic-layer
+git clone https://github.com/Fraser27/rosetta-sdl.git
+cd rosetta-sdl
 
 # Start Neo4j + FastAPI
 docker-compose up -d
@@ -168,7 +168,7 @@ Add to `.mcp.json`:
 ```json
 {
   "mcpServers": {
-    "semantic-layer": {
+    "rosetta-sdl": {
       "command": "python",
       "args": ["-m", "src.mcp.server"],
       "env": { "API_URL": "http://localhost:8000" }
@@ -291,11 +291,11 @@ npx cdk deploy
 CDK outputs:
 
 ```
-SemanticLayerStack.Ec2PublicIp = 54.xxx.xxx.xxx
-SemanticLayerStack.AppRunnerUrl = https://xxxxx.us-east-1.awsapprunner.com
-SemanticLayerStack.CognitoUserPoolId = us-east-1_XXXXXXX
-SemanticLayerStack.CognitoClientId = xxxxxxxxxxxxxxxxx
-SemanticLayerStack.SshCommand = aws ssm start-session --target i-xxxxxxxxx
+RosettaSdlStack.Ec2PublicIp = 54.xxx.xxx.xxx
+RosettaSdlStack.AppRunnerUrl = https://xxxxx.us-east-1.awsapprunner.com
+RosettaSdlStack.CognitoUserPoolId = us-east-1_XXXXXXX
+RosettaSdlStack.CognitoClientId = xxxxxxxxxxxxxxxxx
+RosettaSdlStack.SshCommand = aws ssm start-session --target i-xxxxxxxxx
 ```
 
 ### Post-deploy setup
@@ -305,10 +305,10 @@ SemanticLayerStack.SshCommand = aws ssm start-session --target i-xxxxxxxxx
 aws ssm start-session --target <instance-id>
 
 # Navigate to app
-cd /opt/semantic-layer
+cd /opt/rosetta-sdl
 
 # Clone your code (or scp it)
-git clone <repo-url> .
+git clone https://github.com/Fraser27/rosetta-sdl.git .
 
 # Start services
 docker-compose up -d
@@ -531,7 +531,7 @@ make smoke-test
 ## Project Structure
 
 ```
-aws-semantic-layer/
+rosetta-sdl/
 ├── src/
 │   ├── main.py                  # FastAPI app + Mangum handler
 │   ├── config.py                # YAML + env config loader
@@ -580,7 +580,7 @@ aws-semantic-layer/
 │   └── vite.config.ts           # Dev proxy to FastAPI
 ├── cdk/                         # AWS CDK infrastructure
 │   └── lib/
-│       └── semantic-layer-stack.ts  # EC2 + App Runner + Cognito
+│       └── rosetta-sdl-stack.ts     # EC2 + App Runner + Cognito
 ├── sample/
 │   ├── config.yaml              # Sample configuration
 │   ├── metrics.yaml             # 6 sample metrics + join paths
