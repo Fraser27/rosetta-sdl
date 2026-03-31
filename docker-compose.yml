@@ -1,0 +1,39 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/semantic-layer
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  rosetta:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: semantic-layer
+      GLUE_DATABASES: ""
+      VECTOR_BUCKETS: ""
+      ATHENA_WORKGROUP: semantic-layer-wg
+      ATHENA_OUTPUT_BUCKET: ""
+      METRICS_FILE: /app/sample/metrics.yaml
+      BEDROCK_QUERY_MODEL: anthropic.claude-sonnet-4-20250514
+      BEDROCK_ENRICHMENT_MODEL: anthropic.claude-haiku-4-5-20251001
+    depends_on:
+      neo4j:
+        condition: service_healthy
+
+volumes:
+  neo4j_data:

@@ -1,0 +1,87 @@
+version: "1.0"
+
+metrics:
+  - metric_id: m_001
+    name: total_revenue
+    synonyms: ["total sales", "revenue", "gross revenue"]
+    definition: "Total dollar value of all completed orders"
+    type: simple
+    expression: "SUM(total_amount)"
+    source_table: "ecommerce.orders"
+    filters: ["status != 'cancelled'"]
+    grain: ["order_date"]
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    owner: "analytics-team"
+
+  - metric_id: m_002
+    name: average_order_value
+    synonyms: ["AOV", "avg order", "average order"]
+    definition: "Average dollar value per completed order"
+    type: derived
+    expression: "SUM(total_amount) / COUNT(DISTINCT order_id)"
+    source_table: "ecommerce.orders"
+    filters: ["status != 'cancelled'"]
+    grain: ["order_date"]
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    owner: "analytics-team"
+
+  - metric_id: m_003
+    name: customer_count
+    synonyms: ["number of customers", "active customers", "unique customers"]
+    definition: "Count of distinct customers"
+    type: simple
+    expression: "COUNT(DISTINCT customer_id)"
+    source_table: "ecommerce.customers"
+    filters: []
+    grain: []
+    time_grains: []
+    owner: "analytics-team"
+
+  - metric_id: m_004
+    name: order_count
+    synonyms: ["number of orders", "total orders"]
+    definition: "Total number of orders"
+    type: simple
+    expression: "COUNT(DISTINCT order_id)"
+    source_table: "ecommerce.orders"
+    filters: []
+    grain: ["order_date"]
+    time_grains: ["day", "week", "month", "quarter", "year"]
+    owner: "analytics-team"
+
+  - metric_id: m_005
+    name: items_per_order
+    synonyms: ["basket size", "average items"]
+    definition: "Average number of items per order"
+    type: simple
+    expression: "AVG(item_count)"
+    source_table: "ecommerce.orders"
+    filters: []
+    grain: ["order_date"]
+    time_grains: ["day", "week", "month"]
+    owner: "analytics-team"
+
+  - metric_id: m_006
+    name: revenue_per_customer
+    synonyms: ["customer value", "ARPC", "average revenue per customer"]
+    definition: "Average revenue generated per customer"
+    type: derived
+    expression: "SUM(total_amount) / COUNT(DISTINCT customer_id)"
+    source_table: "ecommerce.orders"
+    filters: ["status != 'cancelled'"]
+    grain: []
+    time_grains: ["month", "quarter", "year"]
+    owner: "analytics-team"
+
+join_paths:
+  - source: "ecommerce.orders"
+    target: "ecommerce.customers"
+    on: "customer_id"
+
+  - source: "ecommerce.orders"
+    target: "ecommerce.order_items"
+    on: "order_id"
+
+  - source: "ecommerce.order_items"
+    target: "ecommerce.products"
+    on: "product_id"

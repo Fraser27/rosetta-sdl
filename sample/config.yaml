@@ -1,0 +1,26 @@
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  password: "semantic-layer"
+
+databases:
+  - name: "ecommerce"
+    glue_database: "ecommerce_demo"
+    catalog_type: "glue"
+
+vector_buckets: []
+  # - name: "company-docs"
+  #   bucket: "my-vector-bucket"
+
+athena:
+  workgroup: "semantic-layer-wg"
+  output_bucket: "s3://my-bucket/athena-results/"
+
+metrics_file: "sample/metrics.yaml"
+
+bedrock:
+  query_model: "anthropic.claude-sonnet-4-20250514"
+  enrichment_model: "anthropic.claude-haiku-4-5-20251001"
+
+allowed_tables: []
+max_query_rows: 500
