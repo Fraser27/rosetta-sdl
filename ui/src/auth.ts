@@ -2,21 +2,41 @@
  * Cognito authentication helpers.
  *
  * Uses the Cognito Hosted UI (OAuth2 Authorization Code flow).
- * When VITE_COGNITO_USER_POOL_ID is not set, auth is disabled (local dev).
- *
- * Environment variables (set at build time via Vite):
- *   VITE_COGNITO_USER_POOL_ID
- *   VITE_COGNITO_CLIENT_ID
- *   VITE_COGNITO_REGION
- *   VITE_COGNITO_DOMAIN
+ * Config is loaded from /runtime-config.json (deployed by CDK) at startup,
+ * with Vite env vars as fallback for local dev.
  */
 
-const POOL_ID = import.meta.env.VITE_COGNITO_USER_POOL_ID || '';
-const CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID || '';
-const REGION = import.meta.env.VITE_COGNITO_REGION || 'us-east-1';
-const DOMAIN = import.meta.env.VITE_COGNITO_DOMAIN || '';
+interface RuntimeConfig {
+  cognitoUserPoolId?: string;
+  cognitoClientId?: string;
+  cognitoRegion?: string;
+  cognitoDomain?: string;
+}
 
-export const AUTH_ENABLED = !!(POOL_ID && CLIENT_ID && DOMAIN);
+let runtimeConfig: RuntimeConfig = {};
+
+export async function loadRuntimeConfig(): Promise<void> {
+  try {
+    const res = await fetch('/runtime-config.json');
+    if (res.ok) runtimeConfig = await res.json();
+  } catch {
+    // No runtime config — fall back to Vite env vars (local dev)
+  }
+}
+
+function cfg(runtimeKey: keyof RuntimeConfig, viteKey: string): string {
+  return runtimeConfig[runtimeKey] || import.meta.env[viteKey] || '';
+}
+
+const getPoolId = () => cfg('cognitoUserPoolId', 'VITE_COGNITO_USER_POOL_ID');
+const getClientId = () => cfg('cognitoClientId', 'VITE_COGNITO_CLIENT_ID');
+const getRegion = () => cfg('cognitoRegion', 'VITE_COGNITO_REGION') || 'us-east-1';
+const getDomain = () => cfg('cognitoDomain', 'VITE_COGNITO_DOMAIN');
+
+export function isAuthEnabled(): boolean {
+  return !!(getPoolId() && getClientId() && getDomain());
+}
+
 
 function getRedirectUri(): string {
   return `${window.location.origin}/`;
@@ -24,28 +44,28 @@ function getRedirectUri(): string {
 
 /** Redirect to Cognito Hosted UI for login */
 export function login(): void {
-  if (!AUTH_ENABLED) return;
+  if (!isAuthEnabled()) return;
   const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: getClientId(),
     response_type: 'token',
     scope: 'openid email profile',
     redirect_uri: getRedirectUri(),
   });
-  window.location.href = `https://${DOMAIN}/login?${params}`;
+  window.location.href = `https://${getDomain()}/login?${params}`;
 }
 
 /** Redirect to Cognito for logout */
 export function logout(): void {
   clearTokens();
-  if (!AUTH_ENABLED) {
+  if (!isAuthEnabled()) {
     window.location.reload();
     return;
   }
   const params = new URLSearchParams({
-    client_id: CLIENT_ID,
+    client_id: getClientId(),
     logout_uri: getRedirectUri(),
   });
-  window.location.href = `https://${DOMAIN}/logout?${params}`;
+  window.location.href = `https://${getDomain()}/logout?${params}`;
 }
 
 /** Parse tokens from URL hash after Cognito redirect */
@@ -81,7 +101,7 @@ export function handleAuthCallback(): boolean {
 
 /** Get the access token for API calls */
 export function getAccessToken(): string | null {
-  if (!AUTH_ENABLED) return null;
+  if (!isAuthEnabled()) return null;
 
   const token = localStorage.getItem('access_token');
   const expiry = parseInt(localStorage.getItem('token_expiry') || '0');
@@ -95,7 +115,7 @@ export function getAccessToken(): string | null {
 
 /** Check if user is authenticated */
 export function isAuthenticated(): boolean {
-  if (!AUTH_ENABLED) return true; // Auth disabled in local dev
+  if (!isAuthEnabled()) return true; // Auth disabled in local dev
   return !!getAccessToken();
 }
 

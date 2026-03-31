@@ -2,8 +2,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import * as apprunner from 'aws-cdk-lib/aws-apprunner';
-import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -35,7 +37,7 @@ export class RosettaSdlStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
-    // FastAPI (8000) — open to App Runner and direct access
+    // FastAPI (8000) — open to CloudFront and direct access
     ec2Sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(8000), 'FastAPI');
     // Neo4j Browser (7474) — for admin access
     ec2Sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(7474), 'Neo4j Browser');
@@ -242,59 +244,85 @@ echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
       oAuth: {
         flows: { authorizationCodeGrant: true, implicitCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
-        callbackUrls: ['http://localhost:3000/', 'https://placeholder.awsapprunner.com/'],
-        logoutUrls: ['http://localhost:3000/', 'https://placeholder.awsapprunner.com/'],
+        callbackUrls: ['http://localhost:3000/'],
+        logoutUrls: ['http://localhost:3000/'],
       },
       preventUserExistenceErrors: true,
     });
 
     // ─────────────────────────────────────────────
-    // App Runner — React UI
+    // CloudFront + S3 — React UI
     // ─────────────────────────────────────────────
-    const uiImage = new ecr_assets.DockerImageAsset(this, 'UiImage', {
-      directory: path.join(__dirname, '../../'),
-      file: 'Dockerfile.ui',
+    const uiBucket = new s3.Bucket(this, 'UiBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     });
 
-    const appRunnerRole = new iam.Role(this, 'AppRunnerAccessRole', {
-      assumedBy: new iam.ServicePrincipal('build.apprunner.amazonaws.com'),
-    });
-    uiImage.repository.grantPull(appRunnerRole);
-
-    const appRunnerInstanceRole = new iam.Role(this, 'AppRunnerInstanceRole', {
-      assumedBy: new iam.ServicePrincipal('tasks.apprunner.amazonaws.com'),
-    });
-
-    const appRunnerService = new apprunner.CfnService(this, 'UiService', {
-      serviceName: 'semantic-layer-ui',
-      sourceConfiguration: {
-        authenticationConfiguration: {
-          accessRoleArn: appRunnerRole.roleArn,
+    const distribution = new cloudfront.Distribution(this, 'UiDistribution', {
+      defaultBehavior: {
+        origin: origins.S3BucketOrigin.withOriginAccessControl(uiBucket),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      },
+      additionalBehaviors: {
+        '/api/*': {
+          origin: new origins.HttpOrigin(instance.instancePublicIp, {
+            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+            httpPort: 8000,
+          }),
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+          cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
         },
-        imageRepository: {
-          imageIdentifier: uiImage.imageUri,
-          imageRepositoryType: 'ECR',
-          imageConfiguration: {
-            port: '80',
-            runtimeEnvironmentVariables: [
-              { name: 'VITE_API_URL', value: `http://${instance.instancePublicIp}:8000` },
-              { name: 'VITE_COGNITO_USER_POOL_ID', value: userPool.userPoolId },
-              { name: 'VITE_COGNITO_CLIENT_ID', value: userPoolClient.userPoolClientId },
-              { name: 'VITE_COGNITO_REGION', value: cdk.Aws.REGION },
-              { name: 'VITE_COGNITO_DOMAIN', value: `${userPoolDomain.domainName}.auth.${cdk.Aws.REGION}.amazoncognito.com` },
+      },
+      defaultRootObject: 'index.html',
+      errorResponses: [
+        {
+          httpStatus: 403,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+        },
+        {
+          httpStatus: 404,
+          responseHttpStatus: 200,
+          responsePagePath: '/index.html',
+        },
+      ],
+    });
+
+    // Deploy built UI assets
+    new s3deploy.BucketDeployment(this, 'UiDeploy', {
+      sources: [
+        s3deploy.Source.asset(path.join(__dirname, '../../ui'), {
+          bundling: {
+            image: cdk.DockerImage.fromRegistry('node:20-slim'),
+            command: [
+              'bash', '-c',
+              'npm ci && npm run build && cp -r dist/* /asset-output/',
             ],
           },
-        },
-      },
-      instanceConfiguration: {
-        cpu: '0.25 vCPU',
-        memory: '0.5 GB',
-        instanceRoleArn: appRunnerInstanceRole.roleArn,
-      },
-      healthCheckConfiguration: {
-        protocol: 'HTTP',
-        path: '/',
-      },
+        }),
+      ],
+      destinationBucket: uiBucket,
+      distribution,
+      distributionPaths: ['/*'],
+    });
+
+    // Deploy runtime config for Cognito (values only known at deploy time)
+    new s3deploy.BucketDeployment(this, 'UiConfig', {
+      sources: [
+        s3deploy.Source.jsonData('runtime-config.json', {
+          cognitoUserPoolId: userPool.userPoolId,
+          cognitoClientId: userPoolClient.userPoolClientId,
+          cognitoRegion: cdk.Aws.REGION,
+          cognitoDomain: `${userPoolDomain.domainName}.auth.${cdk.Aws.REGION}.amazoncognito.com`,
+        }),
+      ],
+      destinationBucket: uiBucket,
+      distribution,
+      distributionPaths: ['/runtime-config.json'],
     });
 
     // ─────────────────────────────────────────────
@@ -310,9 +338,9 @@ echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
       description: 'EC2 Instance ID — use SSM Session Manager to connect',
     });
 
-    new cdk.CfnOutput(this, 'AppRunnerUrl', {
-      value: `https://${appRunnerService.attrServiceUrl}`,
-      description: 'React UI URL on App Runner',
+    new cdk.CfnOutput(this, 'CloudFrontUrl', {
+      value: `https://${distribution.distributionDomainName}`,
+      description: 'React UI URL on CloudFront',
     });
 
     new cdk.CfnOutput(this, 'CognitoUserPoolId', {

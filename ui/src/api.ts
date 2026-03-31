@@ -1,4 +1,4 @@
-import { getAccessToken, AUTH_ENABLED } from './auth';
+import { getAccessToken, isAuthEnabled } from './auth';
 
 const BASE = '/api';
 
@@ -8,7 +8,7 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   };
 
   // Add auth token if Cognito is enabled
-  if (AUTH_ENABLED) {
+  if (isAuthEnabled()) {
     const token = getAccessToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -22,7 +22,7 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
 
   if (res.status === 401) {
     // Token expired — redirect to login
-    if (AUTH_ENABLED) {
+    if (isAuthEnabled()) {
       localStorage.clear();
       window.location.href = '/';
     }

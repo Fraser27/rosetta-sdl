@@ -1,7 +1,7 @@
-import { login, AUTH_ENABLED } from '../auth'
+import { login, isAuthEnabled } from '../auth'
 
 export default function Login() {
-  if (!AUTH_ENABLED) return null
+  if (!isAuthEnabled()) return null
 
   return (
     <div style={{

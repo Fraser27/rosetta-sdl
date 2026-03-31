@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import { api } from './api'
-import { AUTH_ENABLED, isAuthenticated, handleAuthCallback, getUserEmail, logout } from './auth'
+import { isAuthEnabled, isAuthenticated, handleAuthCallback, getUserEmail, logout } from './auth'
 import Dashboard from './pages/Dashboard'
 import Tables from './pages/Tables'
 import TableDetail from './pages/TableDetail'
@@ -39,7 +39,7 @@ function App() {
   const toggleTheme = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'))
 
   // Show login page if auth is enabled and user is not authenticated
-  if (AUTH_ENABLED && !authed) {
+  if (isAuthEnabled() && !authed) {
     return <Login />
   }
 
@@ -58,7 +58,7 @@ function App() {
           <NavLink to="/admin">Admin</NavLink>
         </nav>
         <div className="sidebar-footer">
-          {AUTH_ENABLED && (
+          {isAuthEnabled() && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--text-dim)', marginBottom: 6 }}>
               <span>{getUserEmail()}</span>
               <button
