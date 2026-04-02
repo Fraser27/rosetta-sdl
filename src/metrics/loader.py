@@ -40,10 +40,12 @@ def load_metrics(metrics_file: str) -> tuple[list[MetricDefinition], list[JoinPa
 
     joins = []
     for j in data.get("join_paths", []):
+        # Note: YAML 1.1 (PyYAML) interprets bare `on` as boolean True
+        on_col = j.get("on") or j.get("on_column") or j.get(True, "")
         joins.append(JoinPath(
             source_table=j["source"],
             target_table=j["target"],
-            on_column=j["on"],
+            on_column=on_col,
             join_type=j.get("join_type", "INNER"),
         ))
 
