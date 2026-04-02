@@ -134,6 +134,36 @@ async def query_metric(metric_id: str, request: MetricQueryRequest):
     }
 
 
+@router.post("/{metric_id}/compile")
+async def compile_metric_endpoint(metric_id: str, request: MetricQueryRequest | None = None):
+    """Compile a governed metric to SQL without executing it."""
+    graph = _get_graph()
+    req = request or MetricQueryRequest()
+
+    filter_clauses = [
+        FilterClause(column=f["column"], operator=f.get("operator", "="), value=f["value"])
+        for f in req.filters
+    ]
+
+    compiled = compile_metric(
+        metric_id=metric_id,
+        graph=graph,
+        dimensions=req.dimensions,
+        filters=filter_clauses,
+        order_by=req.order_by,
+        limit=req.limit or _config.max_query_rows,
+    )
+
+    if not compiled.is_valid:
+        raise HTTPException(400, f"Compilation error: {'; '.join(compiled.errors)}")
+
+    return {
+        "metric": compiled.metric_name,
+        "sql": compiled.sql,
+        "source_table": compiled.source_table,
+    }
+
+
 def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -> None:
     """Shared logic for creating/updating a metric node and its relationships."""
     joins_json = json.dumps([j.model_dump() for j in req.joins]) if req.joins else "[]"

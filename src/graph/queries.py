@@ -143,8 +143,8 @@ OPTIONAL MATCH (m)-[:MEASURES]->(t:Table)
 RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
        m.grain AS grain, m.time_grains AS time_grains, m.filters AS filters,
-       t.full_name AS source_table, m.joins_json AS joins_json,
-       m.base_metrics AS base_metrics
+       COALESCE(t.full_name, m.source_table, '') AS source_table,
+       m.joins_json AS joins_json, m.base_metrics AS base_metrics
 ORDER BY m.name
 """
 
@@ -155,7 +155,7 @@ OPTIONAL MATCH (m)-[:USES_COLUMN]->(c:Column)
 RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
        m.grain AS grain, m.time_grains AS time_grains, m.filters AS filters,
-       m.source_table AS source_table, m.joins_json AS joins_json,
+       COALESCE(m.source_table, '') AS source_table, m.joins_json AS joins_json,
        m.base_metrics AS base_metrics,
        t.full_name AS table_name,
        collect(c.name) AS used_columns

@@ -119,6 +119,8 @@ export const api = {
     request<Metric>(`/metrics/${id}`, { method: 'PUT', body: JSON.stringify(m) }),
   deleteMetric: (id: string) =>
     request<{ ok: boolean }>(`/metrics/${id}`, { method: 'DELETE' }),
+  compileMetric: (id: string) =>
+    request<{ metric: string; sql: string; source_table: string }>(`/metrics/${id}/compile`, { method: 'POST' }),
   composeMetrics: (metric_ids: string[], dimensions: string[], limit?: number) =>
     request<{ sql: string; metric: string; results?: unknown }>('/query/compose', {
       method: 'POST',
