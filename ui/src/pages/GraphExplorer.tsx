@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import { api, type GraphNode, type GraphEdge } from '../api'
 
 const NODE_COLORS: Record<string, string> = {
@@ -21,13 +21,17 @@ interface SimNode extends GraphNode {
 export default function GraphExplorer() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const [nodes, setNodes] = useState<SimNode[]>([])
-  const [edges, setEdges] = useState<GraphEdge[]>([])
+  const [allNodes, setAllNodes] = useState<SimNode[]>([])
+  const [allEdges, setAllEdges] = useState<GraphEdge[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [hovered, setHovered] = useState<SimNode | null>(null)
   const dragRef = useRef<SimNode | null>(null)
   const animRef = useRef<number>(0)
+
+  // Filters
+  const [selectedDatasource, setSelectedDatasource] = useState<string>('__all__')
+  const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(Object.keys(NODE_COLORS)))
 
   useEffect(() => {
     api.graphData()
@@ -39,12 +43,69 @@ export default function GraphExplorer() {
           vx: 0,
           vy: 0,
         }))
-        setNodes(simNodes)
-        setEdges(e)
+        setAllNodes(simNodes)
+        setAllEdges(e)
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  // Extract unique datasources from nodes
+  const datasources = useMemo(() => {
+    const ds = new Set<string>()
+    for (const n of allNodes) {
+      if (n.datasource) ds.add(n.datasource)
+    }
+    return Array.from(ds).sort()
+  }, [allNodes])
+
+  // Extract node types present in the data
+  const nodeTypes = useMemo(() => {
+    const types = new Set<string>()
+    for (const n of allNodes) types.add(n.type)
+    return Array.from(types).sort()
+  }, [allNodes])
+
+  // Filtered nodes and edges
+  const { nodes, edges } = useMemo(() => {
+    // Filter nodes by datasource and type
+    const filteredNodes = allNodes.filter((n) => {
+      // Type filter
+      if (!visibleTypes.has(n.type)) return false
+      // Datasource filter
+      if (selectedDatasource === '__all__') return true
+      // DataSource nodes: show only the selected one
+      if (n.type === 'DataSource') return n.label === selectedDatasource
+      // Nodes with a datasource: match
+      if (n.datasource) return n.datasource === selectedDatasource
+      // Nodes without a datasource (e.g. BusinessTerm, Document, Concept): show always
+      return true
+    })
+
+    const visibleIds = new Set(filteredNodes.map((n) => n.id))
+    const filteredEdges = allEdges.filter(
+      (e) => visibleIds.has(e.source) && visibleIds.has(e.target)
+    )
+
+    return { nodes: filteredNodes, edges: filteredEdges }
+  }, [allNodes, allEdges, selectedDatasource, visibleTypes])
+
+  // Re-scatter positions when filter changes significantly
+  const prevCountRef = useRef(0)
+  useEffect(() => {
+    if (nodes.length > 0 && Math.abs(nodes.length - prevCountRef.current) > 5) {
+      const canvas = canvasRef.current
+      const cw = canvas?.clientWidth || 800
+      const ch = canvas?.clientHeight || 500
+      for (let i = 0; i < nodes.length; i++) {
+        nodes[i].x = cw / 2 + Math.cos(i * 0.6) * (180 + Math.random() * 140)
+        nodes[i].y = ch / 2 + Math.sin(i * 0.6) * (130 + Math.random() * 110)
+        nodes[i].vx = 0
+        nodes[i].vy = 0
+      }
+    }
+    prevCountRef.current = nodes.length
+  }, [nodes.length])
 
   // Force simulation
   useEffect(() => {
@@ -52,7 +113,6 @@ export default function GraphExplorer() {
 
     const nodeMap = new Map(nodes.map((n) => [n.id, n]))
 
-    // Build adjacency list for drag-pulling neighbors
     const neighbors = new Map<string, Set<string>>()
     for (const n of nodes) neighbors.set(n.id, new Set())
     for (const e of edges) {
@@ -71,13 +131,11 @@ export default function GraphExplorer() {
       const ch = canvas?.clientHeight || 500
       const pad = 30
 
-      // Weak center gravity — keeps graph on screen but lets subgraphs spread
       for (const n of nodes) {
         n.vx += (cw / 2 - n.x) * 0.0004 * alpha
         n.vy += (ch / 2 - n.y) * 0.0004 * alpha
       }
 
-      // Strong long-range repulsion — pushes all nodes apart
       for (let i = 0; i < nodes.length; i++) {
         for (let j = i + 1; j < nodes.length; j++) {
           const a = nodes[i], b = nodes[j]
@@ -92,7 +150,6 @@ export default function GraphExplorer() {
         }
       }
 
-      // Attraction along edges — pulls connected nodes to ideal distance
       for (const e of edges) {
         const a = nodeMap.get(e.source), b = nodeMap.get(e.target)
         if (!a || !b) continue
@@ -103,7 +160,6 @@ export default function GraphExplorer() {
         b.vx -= dx * force; b.vy -= dy * force
       }
 
-      // When dragging, pull neighbors toward the dragged node
       if (dragRef.current) {
         const dragged = dragRef.current
         const nbs = neighbors.get(dragged.id)
@@ -113,7 +169,6 @@ export default function GraphExplorer() {
             if (!nb) continue
             const dx = dragged.x - nb.x, dy = dragged.y - nb.y
             const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            // Pull neighbors gently — only if far, and cap at ideal distance
             if (dist > 180) {
               const pull = (dist - 180) * 0.008 / dist
               nb.vx += dx * pull
@@ -123,12 +178,10 @@ export default function GraphExplorer() {
         }
       }
 
-      // Apply velocity with damping + keep in bounds
       for (const n of nodes) {
         if (n === dragRef.current) continue
         n.vx *= 0.9; n.vy *= 0.9
         n.x += n.vx; n.y += n.vy
-        // Soft boundary — bounce off edges
         if (n.x < pad) { n.x = pad; n.vx *= -0.5; }
         if (n.x > cw - pad) { n.x = cw - pad; n.vx *= -0.5; }
         if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
@@ -157,7 +210,6 @@ export default function GraphExplorer() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
 
-    // Read CSS vars for theme-aware colors
     const style = getComputedStyle(document.documentElement)
     const labelColor = style.getPropertyValue('--text').trim() || '#1a1d2e'
     const dimColor = style.getPropertyValue('--text-dim').trim() || '#6b7085'
@@ -165,7 +217,6 @@ export default function GraphExplorer() {
 
     const nodeMap = new Map(nodes.map((n) => [n.id, n]))
 
-    // Draw edges
     ctx.strokeStyle = edgeColor
     ctx.lineWidth = 1
     for (const e of edges) {
@@ -176,7 +227,6 @@ export default function GraphExplorer() {
       ctx.lineTo(b.x, b.y)
       ctx.stroke()
 
-      // Edge label
       const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
       ctx.fillStyle = dimColor
       ctx.font = '9px Inter, sans-serif'
@@ -184,7 +234,6 @@ export default function GraphExplorer() {
       ctx.fillText(e.type, mx, my - 4)
     }
 
-    // Draw nodes
     for (const n of nodes) {
       const color = NODE_COLORS[n.type] || '#6c8cff'
       const radius = n.type === 'Table' || n.type === 'DataSource' ? 12 :
@@ -202,30 +251,33 @@ export default function GraphExplorer() {
         ctx.stroke()
       }
 
-      // Label
       ctx.fillStyle = labelColor
       ctx.font = n.type === 'Column' ? '9px Inter, sans-serif' : '11px Inter, sans-serif'
       ctx.textAlign = 'center'
       ctx.fillText(n.label, n.x, n.y + radius + 14)
     }
 
-    // Tooltip for hovered node
     if (hovered) {
       const x = hovered.x + 16, y = hovered.y - 10
-      const text = `${hovered.type}: ${hovered.label}`
-      ctx.font = '12px Inter, sans-serif'
-      const w = ctx.measureText(text).width + 16
+      const lines = [`${hovered.type}: ${hovered.label}`]
+      if (hovered.datasource) lines.push(`Source: ${hovered.datasource}`)
+      const maxW = Math.max(...lines.map((l) => ctx.measureText(l).width))
+      const w = maxW + 20
+      const h = lines.length * 18 + 10
       const tooltipBg = style.getPropertyValue('--bg-card').trim() || 'rgba(26, 29, 39, 0.95)'
       ctx.fillStyle = tooltipBg
       ctx.beginPath()
-      ctx.roundRect(x, y - 14, w, 24, 4)
+      ctx.roundRect(x, y - 14, w, h, 4)
       ctx.fill()
       ctx.strokeStyle = edgeColor
       ctx.lineWidth = 1
       ctx.stroke()
       ctx.fillStyle = labelColor
+      ctx.font = '12px Inter, sans-serif'
       ctx.textAlign = 'left'
-      ctx.fillText(text, x + 8, y + 3)
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], x + 10, y + 3 + i * 18)
+      }
     }
   }
 
@@ -262,6 +314,18 @@ export default function GraphExplorer() {
 
   const handleMouseUp = () => { dragRef.current = null }
 
+  const toggleType = (type: string) => {
+    setVisibleTypes((prev) => {
+      const next = new Set(prev)
+      if (next.has(type)) {
+        next.delete(type)
+      } else {
+        next.add(type)
+      }
+      return next
+    })
+  }
+
   if (loading) return <div className="loading"><div className="spinner" /></div>
   if (error) return <div className="empty-state">Error loading graph: {error}</div>
 
@@ -272,13 +336,46 @@ export default function GraphExplorer() {
         <p>Interactive visualization of the semantic layer ontology</p>
       </div>
 
-      <div className="graph-legend">
-        {Object.entries(NODE_COLORS).map(([type, color]) => (
-          <div className="graph-legend-item" key={type}>
-            <div className="graph-legend-dot" style={{ background: color }} />
-            {type}
+      <div className="graph-filters">
+        <div className="graph-filter-group">
+          <label className="graph-filter-label">DataSource</label>
+          <select
+            className="graph-filter-select"
+            value={selectedDatasource}
+            onChange={(e) => setSelectedDatasource(e.target.value)}
+          >
+            <option value="__all__">All DataSources</option>
+            {datasources.map((ds) => (
+              <option key={ds} value={ds}>{ds}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="graph-filter-group">
+          <label className="graph-filter-label">Node Types</label>
+          <div className="graph-type-toggles">
+            {nodeTypes.map((type) => (
+              <button
+                key={type}
+                className={`graph-type-toggle ${visibleTypes.has(type) ? 'active' : ''}`}
+                style={{
+                  '--toggle-color': NODE_COLORS[type] || '#6c8cff',
+                } as React.CSSProperties}
+                onClick={() => toggleType(type)}
+              >
+                <span
+                  className="graph-legend-dot"
+                  style={{
+                    background: visibleTypes.has(type)
+                      ? (NODE_COLORS[type] || '#6c8cff')
+                      : 'var(--border)',
+                  }}
+                />
+                {type}
+              </button>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
 
       <div className="graph-container" ref={containerRef}>
@@ -297,7 +394,10 @@ export default function GraphExplorer() {
           <h3>Graph Stats</h3>
         </div>
         <p style={{ fontSize: 14, color: 'var(--text-dim)' }}>
-          {nodes.length} nodes, {edges.length} edges. Drag nodes to rearrange.
+          Showing {nodes.length} nodes, {edges.length} edges
+          {selectedDatasource !== '__all__' && ` (filtered to ${selectedDatasource})`}.
+          {allNodes.length !== nodes.length && ` Total: ${allNodes.length} nodes, ${allEdges.length} edges.`}
+          {' '}Drag nodes to rearrange.
         </p>
       </div>
     </>

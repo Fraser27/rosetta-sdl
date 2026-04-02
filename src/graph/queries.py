@@ -188,6 +188,14 @@ DETACH DELETE m
 GRAPH_DATA = """
 MATCH (n)
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
+OPTIONAL MATCH (ds1:DataSource)-[:CONTAINS]->(n) WHERE lbl = 'Table'
+OPTIONAL MATCH (ds2:DataSource)-[:CONTAINS]->(:Table)-[:HAS_COLUMN]->(n) WHERE lbl = 'Column'
+OPTIONAL MATCH (ds3:DataSource)-[:CONTAINS]->(:Table)<-[:DEFINED_ON]-(n) WHERE lbl = 'Metric'
+WITH n, lbl, nid,
+     CASE lbl
+         WHEN 'DataSource' THEN n.name
+         ELSE COALESCE(ds1.name, ds2.name, ds3.name)
+     END AS datasource
 RETURN collect({
     id: toString(nid),
     label: CASE lbl
@@ -201,6 +209,7 @@ RETURN collect({
         ELSE toString(nid)
     END,
     type: lbl,
+    datasource: datasource,
     properties: {}
 }) AS nodes
 """

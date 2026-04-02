@@ -124,6 +124,7 @@ export interface GraphNode {
   id: string;
   label: string;
   type: string;
+  datasource: string | null;
   properties: Record<string, unknown>;
 }
 
