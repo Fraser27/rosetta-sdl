@@ -55,6 +55,7 @@ class DocumentMeta(BaseModel):
     vector_index: str = ""
     description: str = ""
     type: str = "document"  # document | policy | manual
+    metadata_keys: list[ColumnMeta] = Field(default_factory=list)  # queryable attributes (excl. embeddings)
 
 
 # -- API response models --

@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException
 
 from src.config import SemanticLayerConfig
 from src.discovery.enrichment import enrich_documents, enrich_tables
-from src.discovery.glue_scanner import discover_all_databases, infer_joins, scan_databases
-from src.discovery.s3vectors_scanner import scan_vector_buckets
+from src.discovery.glue_scanner import discover_all_databases, scan_databases
+from src.discovery.s3vectors_scanner import discover_all_vector_buckets, scan_vector_buckets
 from src.graph.client import GraphClient
 from src.graph.loader import load_documents, load_metrics, load_structured
 from src.metrics.loader import load_metrics as load_metrics_yaml
@@ -50,24 +50,25 @@ async def scan_and_load():
         summary["tables"] = len(tables)
         summary["columns"] = sum(len(t.columns) for t in tables)
 
-        # Load metrics + join paths from YAML
-        metrics, yaml_joins = load_metrics_yaml(_config.metrics_file)
-
-        # Infer cross-database joins from matching column names
-        inferred_joins = infer_joins(tables)
-        all_joins = yaml_joins + inferred_joins
-        summary["joins"] = len(all_joins)
+        # Load metrics + join paths from YAML (user-curated)
+        metrics, joins = load_metrics_yaml(_config.metrics_file)
+        summary["joins"] = len(joins)
 
         # Load into graph
-        load_structured(graph, tables, all_joins)
+        load_structured(graph, tables, joins)
         load_metrics(graph, metrics)
         summary["metrics"] = len(metrics)
 
-    # 2. Scan S3 Vector buckets
+    # 2. Scan S3 Vector buckets (auto-discover all if none configured)
     if _config.vector_buckets:
         documents = scan_vector_buckets(_config.vector_buckets)
+    else:
+        documents = discover_all_vector_buckets()
+
+    if documents:
         load_documents(graph, documents)
         summary["documents"] = len(documents)
+        summary["metadata_keys"] = sum(len(d.metadata_keys) for d in documents)
 
     logger.info("Scan complete: %s", summary)
     return {"status": "ok", "summary": summary}

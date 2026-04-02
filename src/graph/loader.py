@@ -96,7 +96,8 @@ def load_metrics(graph: GraphClient, metrics: list[MetricDefinition]) -> int:
 
 
 def load_documents(graph: GraphClient, documents: list[DocumentMeta]) -> int:
-    """Load document metadata into the graph. Returns count."""
+    """Load document metadata and their metadata keys into the graph. Returns count."""
+    metadata_key_count = 0
     for doc in documents:
         graph.write(queries.MERGE_DOCUMENT, {
             "s3_key": doc.s3_key,
@@ -107,5 +108,14 @@ def load_documents(graph: GraphClient, documents: list[DocumentMeta]) -> int:
             "type": doc.type,
         })
 
-    logger.info("Loaded %d documents into graph", len(documents))
+        for mk in doc.metadata_keys:
+            graph.write(queries.MERGE_DOCUMENT_METADATA_KEY, {
+                "s3_key": doc.s3_key,
+                "name": mk.name,
+                "data_type": mk.data_type,
+                "filterable": mk.description != "non-filterable",
+            })
+            metadata_key_count += 1
+
+    logger.info("Loaded %d documents with %d metadata keys into graph", len(documents), metadata_key_count)
     return len(documents)

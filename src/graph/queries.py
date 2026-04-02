@@ -52,6 +52,13 @@ SET d.name = $name, d.vector_bucket = $vector_bucket,
     d.type = $type
 """
 
+MERGE_DOCUMENT_METADATA_KEY = """
+MATCH (d:Document {s3_key: $s3_key})
+MERGE (mk:MetadataKey {name: $name, document: $s3_key})
+SET mk.data_type = $data_type, mk.filterable = $filterable
+MERGE (d)-[:HAS_METADATA_KEY]->(mk)
+"""
+
 MERGE_BUSINESS_TERM = """
 MERGE (bt:BusinessTerm {name: $name})
 SET bt.definition = $definition, bt.synonyms = $synonyms
