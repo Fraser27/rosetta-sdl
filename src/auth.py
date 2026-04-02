@@ -26,6 +26,11 @@ logger = logging.getLogger("semantic-layer.auth")
 
 COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 COGNITO_REGION = os.environ.get("COGNITO_REGION", "us-east-1")
+INTERNAL_API_KEY_SECRET_NAME = os.environ.get("INTERNAL_API_KEY_SECRET", "rosetta-sdl/internal-api-key")
+
+# Lazy-loaded internal API key (from env var or Secrets Manager)
+_internal_api_key: str | None = None
+_internal_api_key_loaded: bool = False
 
 # Paths that skip auth
 PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
@@ -33,6 +38,34 @@ PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
 # JWKS cache
 _jwks: dict[str, Any] | None = None
 _jwks_fetched_at: float = 0
+
+
+def _get_internal_api_key() -> str:
+    """Get the internal API key — checks env var first, then Secrets Manager."""
+    global _internal_api_key, _internal_api_key_loaded
+    if _internal_api_key_loaded:
+        return _internal_api_key or ""
+    _internal_api_key_loaded = True
+
+    # 1. Check env var (fastest, works for local dev / docker-compose)
+    env_key = os.environ.get("INTERNAL_API_KEY", "")
+    if env_key:
+        _internal_api_key = env_key
+        logger.info("Internal API key loaded from INTERNAL_API_KEY env var")
+        return _internal_api_key
+
+    # 2. Try Secrets Manager (for EC2 deployment)
+    try:
+        import boto3
+        sm = boto3.client("secretsmanager", region_name=COGNITO_REGION)
+        resp = sm.get_secret_value(SecretId=INTERNAL_API_KEY_SECRET_NAME)
+        _internal_api_key = resp["SecretString"]
+        logger.info("Internal API key loaded from Secrets Manager: %s", INTERNAL_API_KEY_SECRET_NAME)
+        return _internal_api_key
+    except Exception as e:
+        logger.debug("No internal API key available (Secrets Manager: %s): %s", INTERNAL_API_KEY_SECRET_NAME, e)
+        _internal_api_key = ""
+        return ""
 
 
 def _get_jwks_url() -> str:
@@ -103,6 +136,15 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         # Skip public paths
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
+
+        # Allow internal service-to-service calls via API key
+        internal_key = _get_internal_api_key()
+        if internal_key:
+            api_key = request.headers.get("X-API-Key", "")
+            if api_key == internal_key:
+                request.state.user = {"sub": "internal-service"}
+                request.state.user_email = "internal-service"
+                return await call_next(request)
 
         # Extract token from Authorization header
         auth_header = request.headers.get("Authorization", "")

@@ -94,6 +94,16 @@ export class RosettaSdlStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['cloudformation:DescribeStacks'],
+      resources: [`arn:aws:cloudformation:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:stack/RosettaSdlStack/*`],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:rosetta-sdl/*`],
+    }));
+
     // ─────────────────────────────────────────────
     // EC2 Instance — private subnet, Neo4j + FastAPI
     // ─────────────────────────────────────────────

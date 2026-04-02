@@ -42,7 +42,7 @@ A **Neo4j knowledge graph** that unifies your entire data estate — tables, col
 └──────────────────────────┬──────────────────────────────────────┘
                            │ MCP Protocol (stdio)
 ┌──────────────────────────▼──────────────────────────────────────┐
-│              MCP Server (8 tools)                                 │
+│              MCP Server (9 tools)                                 │
 │         discover / query / metrics / search                      │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ REST API
@@ -95,7 +95,8 @@ A **Neo4j knowledge graph** that unifies your entire data estate — tables, col
 | **LLM Enrichment** | Bedrock generates descriptions, extracts business terms and concepts, links documents to tables |
 | **Dual Query Routing** | Graph traversal decides: structured question → Athena, unstructured → S3 Vectors, cross-system → both |
 | **Ad-hoc SQL Generation** | For questions without a matching metric, LLM generates SQL grounded in the real schema from the graph |
-| **MCP Integration** | 8 MCP tools for Claude Code, QuickSuite, Strands SDK, and Bedrock AgentCore |
+| **MCP Integration** | 9 MCP tools for Claude Code, QuickSuite, Strands SDK, and Bedrock AgentCore |
+| **Plan Mode** | `plan_query` returns SQL/search params without executing — agents can delegate execution to external Athena/S3Vectors MCP servers |
 | **React Admin UI** | Visual dashboard, table browser, metric CRUD, interactive force-directed graph explorer, light/dark mode |
 | **Cognito Auth** | JWT-based authentication. Middleware validates tokens on every API call. Disabled in local dev |
 | **Domain-Agnostic** | Point it at any data lake. Provide `config.yaml` + `metrics.yaml`. The framework handles the rest |
@@ -345,6 +346,77 @@ cat sample/seed_graph.cypher | docker exec -i \
 
 ---
 
+## Deploy to AgentCore
+
+Expose Rosetta SDL as an MCP server on **Amazon Bedrock AgentCore**, enabling any AI agent to use it via the MCP protocol with full Cognito authentication.
+
+### Architecture
+
+```
++---------------------+
+|   Any AI Agent      |
+| (Claude, Strands,   |
+|  QuickSuite)        |
++----------+----------+
+           | JWT Auth (Cognito)
+           v
++---------------------+
+| AgentCore Gateway   |
+| (MCP Protocol)      |
++----------+----------+
+           | OAuth2 (Cognito M2M)
+           v
++---------------------+
+| AgentCore Runtime   |
+| Rosetta SDL MCP     |
+| (9 tools)           |
++----------+----------+
+           | HTTP
+           v
++---------------------+
+| EC2 (FastAPI+Neo4j) |
++---------------------+
+```
+
+### Option A: Deploy Script
+
+```bash
+cd agentcore
+pip install bedrock-agentcore-starter-toolkit
+
+# Interactive (step-by-step with pauses)
+python deploy_agent.py
+
+# Non-interactive (automated)
+python deploy_agent.py --non-interactive
+```
+
+The script auto-discovers the ALB DNS from CloudFormation stack outputs.
+
+### Option B: Jupyter Notebook
+
+```bash
+cd agentcore
+jupyter notebook deploy_to_agentcore.ipynb
+```
+
+Walk through each step with explanations — ideal for workshops and learning.
+
+### What Gets Created
+
+| Resource | Purpose |
+|----------|---------|
+| Gateway IAM Role | Allows Gateway to invoke Runtime |
+| Runtime IAM Role | Allows MCP container to run |
+| Gateway Cognito Pool | Inbound JWT auth for clients |
+| Runtime Cognito Pool | Outbound OAuth2 auth (Gateway → Runtime) |
+| AgentCore Gateway | MCP protocol entry point |
+| AgentCore Runtime | Rosetta SDL MCP server (Docker container) |
+| OAuth2 Credential Provider | Links Gateway auth to Runtime auth |
+| Gateway Target | Connects Gateway to Runtime endpoint |
+
+---
+
 ## Neo4j Graph Schema
 
 ### Nodes
@@ -357,6 +429,7 @@ cat sample/seed_graph.cypher | docker exec -i \
 | `Metric` | `metric_id`, `name`, `expression`, `synonyms` | Governed business metric |
 | `BusinessTerm` | `name`, `definition`, `synonyms` | Business vocabulary |
 | `Document` | `name`, `s3_key`, `vector_bucket` | Unstructured document |
+| `MetadataKey` | `name`, `data_type`, `document` | Queryable metadata attribute on a document (excl. embeddings) |
 | `Concept` | `name`, `definition` | Business concept from documents |
 
 ### Edges
@@ -370,6 +443,7 @@ cat sample/seed_graph.cypher | docker exec -i \
 | `USES_COLUMN` | Metric | Column | |
 | `MAPS_TO` | BusinessTerm | Metric/Column | |
 | `RELATES_TO` | Document | Table | |
+| `HAS_METADATA_KEY` | Document | MetadataKey | |
 | `COVERS_CONCEPT` | Document | Concept | |
 
 ### Explore in Neo4j Browser
@@ -426,6 +500,7 @@ RETURN node.name, node.definition, score
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/query/natural-language` | Full NL query pipeline (route → compile → firewall → execute) |
+| `POST` | `/query/plan` | Plan-only: returns SQL + vector search params without executing |
 | `POST` | `/query/sql` | Direct SQL execution with firewall validation |
 
 ### Admin
@@ -440,7 +515,7 @@ RETURN node.name, node.definition, score
 
 ## MCP Tools
 
-8 tools exposed via the [Model Context Protocol](https://modelcontextprotocol.io/) for AI agent integration:
+9 tools exposed via the [Model Context Protocol](https://modelcontextprotocol.io/) for AI agent integration:
 
 | Tool | Description |
 |------|-------------|
@@ -452,6 +527,32 @@ RETURN node.name, node.definition, score
 | `query_metric` | Execute a governed metric with dimensions and filters |
 | `execute_query` | Natural language query — auto-routes to Athena or S3 Vectors |
 | `search_documents` | Semantic search over unstructured documents |
+| `plan_query` | **Plan-only mode** — returns SQL/search params without executing (for delegation to external MCP servers) |
+
+### Execute vs. Plan
+
+Rosetta SDL supports two execution modes:
+
+| Mode | Tool | Who executes? | Use case |
+|------|------|---------------|----------|
+| **Execute** | `execute_query` | Rosetta (internally via Athena/S3 Vectors) | Standalone deployment |
+| **Plan** | `plan_query` | Agent delegates to external Athena/S3Vectors MCP servers | Multi-gateway architecture |
+
+**Plan mode** is useful when you already have Athena and S3Vectors MCP servers deployed on a separate AgentCore Gateway. The agent asks Rosetta for the governed SQL, then passes it to the execution MCPs:
+
+```
+Agent: "What was total revenue?"
+  |
+  |--1--> Rosetta SDL: plan_query("What was total revenue?")
+  |       <-- SQL: SELECT SUM(total_amount) FROM ecommerce.orders WHERE ...
+  |           Intent: metric (governed, deterministic)
+  |           Tables: [ecommerce.orders]
+  |
+  |--2--> Athena MCP: execute_query(sql)
+  |       <-- Results: [{total_revenue: 1234567.89}]
+  |
+  |--3--> Agent synthesizes answer
+```
 
 ---
 
@@ -576,7 +677,13 @@ rosetta-sdl/
 │   │   ├── routes_query.py      # NL query + SQL execution
 │   │   └── routes_admin.py      # Scan, enrich, clear
 │   └── mcp/
-│       └── server.py            # MCP adapter (8 tools)
+│       └── server.py            # MCP adapter (9 tools, stdio transport)
+├── agentcore/                   # AgentCore deployment
+│   ├── rosetta_mcp.py           # MCP server for AgentCore Runtime (streamable-http)
+│   ├── deploy_agent.py          # Standalone deploy script (interactive/non-interactive)
+│   ├── deploy_to_agentcore.ipynb# Workshop notebook (step-by-step)
+│   ├── ac_utils.py              # IAM roles, Cognito setup helpers
+│   └── requirements.txt         # MCP + httpx dependencies
 ├── ui/                          # React admin UI
 │   ├── src/
 │   │   ├── App.tsx              # Layout + auth + routing
@@ -593,7 +700,7 @@ rosetta-sdl/
 │   └── vite.config.ts           # Dev proxy to FastAPI
 ├── cdk/                         # AWS CDK infrastructure
 │   └── lib/
-│       └── rosetta-sdl-stack.ts     # EC2 + App Runner + Cognito
+│       └── rosetta-sdl-stack.ts     # VPC + EC2 + ALB + CloudFront + S3 + Cognito
 ├── sample/
 │   ├── config.yaml              # Sample configuration
 │   ├── metrics.yaml             # 6 sample metrics + join paths
@@ -662,7 +769,7 @@ metrics_file: "metrics.yaml"
 | **SQL firewall via AST parsing** | sqlglot parses SQL into an AST and extracts every table reference — including CTEs, subqueries, and UNIONs. Fail-closed on parse errors means malformed SQL never reaches Athena. |
 | **Graph-based routing** | Full-text indexes across all node types decide whether a question is structured, unstructured, or both. No hardcoded rules. |
 | **FastAPI on EC2** | Portable. `docker-compose up` works on any machine. SSM access, no SSH keys. Move to ECS/Lambda later if needed. |
-| **App Runner for UI** | Zero-config HTTPS, auto-scaling, managed deployment. Perfect for a React SPA served via nginx. |
+| **CloudFront + S3 for UI** | CDN-hosted React SPA with HTTPS. `/api/*` routes to ALB, everything else to S3. Zero server management. |
 | **Cognito auth** | JWT tokens validated in FastAPI middleware. Disabled when `COGNITO_USER_POOL_ID` is empty, so local dev requires zero auth setup. |
 | **MCP over REST** | MCP server is a thin HTTP client that translates tool calls to REST API calls. Deployed locally (Claude Code) or in AgentCore. No separate deployment needed. |
 

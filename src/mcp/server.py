@@ -26,8 +26,10 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
 
-_client = httpx.Client(base_url=API_URL, timeout=60.0)
+_headers = {"X-API-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
+_client = httpx.Client(base_url=API_URL, timeout=60.0, headers=_headers)
 
 
 def _get(path: str, params: dict | None = None) -> dict:
@@ -320,6 +322,52 @@ def search_documents(query: str) -> str:
         if vr.get("data"):
             lines.append(f"  Content: {str(vr['data'])[:200]}")
         lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def plan_query(question: str) -> str:
+    """Plan a query WITHOUT executing it — returns SQL and/or vector search params.
+
+    Use this when you want to get the SQL or search parameters from Rosetta SDL,
+    then execute them yourself via separate Athena or S3Vectors MCP servers.
+
+    Returns:
+      - route: structured | unstructured | both
+      - sql: The firewall-validated SQL (for Athena execution)
+      - tables: Matched tables from the graph
+      - join_paths: Join paths between tables
+      - vector_searches: [{bucket, index}] for S3 Vectors execution
+      - metric_name: If a governed metric was matched (deterministic SQL)
+
+    Args:
+        question: Natural language question (e.g., "What was total revenue last month?")
+    """
+    data = _post("/query/plan", body={"question": question})
+
+    lines = [
+        f"Route: {data.get('route', 'unknown')}",
+        f"Intent: {data.get('intent', 'unknown')}",
+    ]
+
+    if data.get("metric_name"):
+        lines.append(f"Metric: {data['metric_name']} (governed — deterministic SQL)")
+    if data.get("sql"):
+        lines.append(f"SQL: {data['sql']}")
+    if data.get("tables"):
+        lines.append(f"Tables: {', '.join(data['tables'])}")
+    if data.get("join_paths"):
+        for jp in data["join_paths"]:
+            tables = jp.get("tables", [])
+            cols = jp.get("join_columns", [])
+            lines.append(f"Join: {' -> '.join(tables)} ON {', '.join(cols)}")
+    if data.get("vector_searches"):
+        lines.append(f"Vector searches ({len(data['vector_searches'])}):")
+        for vs in data["vector_searches"]:
+            lines.append(f"  bucket: {vs['bucket']}, index: {vs['index']}")
+    if data.get("error"):
+        lines.append(f"Error: {data['error']}")
+
     return "\n".join(lines)
 
 

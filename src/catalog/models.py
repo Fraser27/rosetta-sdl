@@ -102,3 +102,15 @@ class QueryResponse(BaseModel):
     results: dict | None = None
     vector_results: list[dict] | None = None
     error: str | None = None
+
+
+class QueryPlan(BaseModel):
+    """Query plan without execution — returns SQL/search params for external execution."""
+    route: str  # structured | unstructured | both
+    intent: str = ""  # metric | analytical | document
+    metric_name: str | None = None
+    sql: str | None = None
+    tables: list[str] = Field(default_factory=list)
+    join_paths: list[dict] = Field(default_factory=list)
+    vector_searches: list[dict] = Field(default_factory=list)  # [{bucket, index}]
+    error: str | None = None

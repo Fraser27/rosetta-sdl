@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.catalog.models import QueryResponse
+from src.catalog.models import QueryPlan, QueryResponse
 from src.config import SemanticLayerConfig
 from src.graph.client import GraphClient
 from src.metrics.compiler import compile_metric
@@ -166,3 +166,71 @@ async def direct_sql_query(request: SQLQueryRequest):
         max_rows=request.max_rows,
     )
     return {"sql": request.sql, "results": result}
+
+
+@router.post("/plan", response_model=QueryPlan)
+async def plan_query_endpoint(request: NLQueryRequest):
+    """Plan a query without executing it.
+
+    Returns the SQL, route, matched tables, join paths, and vector search params
+    so an external agent can execute them via separate MCP servers (Athena, S3Vectors).
+    """
+    graph = _get_graph()
+
+    route_result = route_query(request.question, graph)
+    plan = QueryPlan(route=route_result.route)
+
+    # Structured path — produce SQL without executing
+    if route_result.route in ("structured", "both"):
+        try:
+            disambiguation = disambiguate(request.question, graph)
+            plan.tables = disambiguation.tables
+            plan.join_paths = disambiguation.join_paths
+
+            # Check if a metric matches
+            if disambiguation.metrics:
+                best_metric = disambiguation.metrics[0]
+                compiled = compile_metric(
+                    metric_id=best_metric["metric_id"],
+                    graph=graph,
+                    limit=request.max_rows,
+                )
+                if compiled.is_valid:
+                    if _firewall:
+                        fw = _firewall.validate(compiled.sql)
+                        if not fw.allowed:
+                            raise HTTPException(403, fw.reason)
+                    plan.intent = "metric"
+                    plan.metric_name = compiled.metric_name
+                    plan.sql = compiled.sql
+
+            # No metric match — generate SQL via LLM
+            if not plan.sql:
+                sql = generate_sql(request.question, disambiguation, graph, _config.bedrock.query_model)
+                if _firewall:
+                    fw = _firewall.validate(sql)
+                    if not fw.allowed:
+                        raise HTTPException(403, fw.reason)
+                plan.intent = "analytical"
+                plan.sql = sql
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Plan structured failed: %s", e)
+            plan.error = str(e)
+
+    # Unstructured path — return vector search params without executing
+    if route_result.route in ("unstructured", "both"):
+        docs = graph.query(
+            "MATCH (d:Document) WHERE d.vector_bucket IS NOT NULL "
+            "RETURN d.vector_bucket AS bucket, d.vector_index AS index_name"
+        )
+        plan.vector_searches = [
+            {"bucket": d["bucket"], "index": d["index_name"]}
+            for d in docs if d.get("bucket") and d.get("index_name")
+        ]
+        if not plan.intent:
+            plan.intent = "document"
+
+    return plan
