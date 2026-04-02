@@ -9,6 +9,7 @@ const NODE_COLORS: Record<string, string> = {
   DataSource: '#a78bfa',
   Document: '#f87171',
   Concept: '#fb923c',
+  MetadataKey: '#38bdf8',
 }
 
 interface SimNode extends GraphNode {
@@ -31,6 +32,7 @@ export default function GraphExplorer() {
 
   // Filters
   const [selectedDatasource, setSelectedDatasource] = useState<string>('__all__')
+  const [selectedTable, setSelectedTable] = useState<string>('__all__')
   const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(Object.keys(NODE_COLORS)))
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export default function GraphExplorer() {
       .finally(() => setLoading(false))
   }, [])
 
-  // Extract unique datasources from nodes
+  // Extract unique datasources
   const datasources = useMemo(() => {
     const ds = new Set<string>()
     for (const n of allNodes) {
@@ -58,6 +60,23 @@ export default function GraphExplorer() {
     }
     return Array.from(ds).sort()
   }, [allNodes])
+
+  // Extract tables for the selected datasource
+  const tables = useMemo(() => {
+    return allNodes
+      .filter((n) => {
+        if (n.type !== 'Table') return false
+        if (selectedDatasource === '__all__') return true
+        return n.datasource === selectedDatasource
+      })
+      .map((n) => n.label)
+      .sort()
+  }, [allNodes, selectedDatasource])
+
+  // Reset table filter when datasource changes
+  useEffect(() => {
+    setSelectedTable('__all__')
+  }, [selectedDatasource])
 
   // Extract node types present in the data
   const nodeTypes = useMemo(() => {
@@ -68,17 +87,47 @@ export default function GraphExplorer() {
 
   // Filtered nodes and edges
   const { nodes, edges } = useMemo(() => {
-    // Filter nodes by datasource and type
+    // When a specific table is selected, show it + all directly connected nodes
+    if (selectedTable !== '__all__') {
+      const tableNode = allNodes.find(
+        (n) => n.type === 'Table' && n.label === selectedTable
+      )
+      if (!tableNode) return { nodes: [], edges: [] }
+
+      // Find all nodes connected to this table (1-hop neighborhood)
+      const connectedIds = new Set<string>([tableNode.id])
+      const tableEdges: GraphEdge[] = []
+      for (const e of allEdges) {
+        if (e.source === tableNode.id) {
+          connectedIds.add(e.target)
+          tableEdges.push(e)
+        }
+        if (e.target === tableNode.id) {
+          connectedIds.add(e.source)
+          tableEdges.push(e)
+        }
+      }
+
+      // Also include edges between the connected nodes (e.g. JOINS_TO targets' columns)
+      // Keep it to 1-hop for clarity
+
+      const filteredNodes = allNodes.filter(
+        (n) => connectedIds.has(n.id) && visibleTypes.has(n.type)
+      )
+      const visibleIds = new Set(filteredNodes.map((n) => n.id))
+      const filteredEdges = tableEdges.filter(
+        (e) => visibleIds.has(e.source) && visibleIds.has(e.target)
+      )
+
+      return { nodes: filteredNodes, edges: filteredEdges }
+    }
+
+    // Datasource + type filter
     const filteredNodes = allNodes.filter((n) => {
-      // Type filter
       if (!visibleTypes.has(n.type)) return false
-      // Datasource filter
       if (selectedDatasource === '__all__') return true
-      // DataSource nodes: show only the selected one
       if (n.type === 'DataSource') return n.label === selectedDatasource
-      // Nodes with a datasource: match
       if (n.datasource) return n.datasource === selectedDatasource
-      // Nodes without a datasource (e.g. BusinessTerm, Document, Concept): show always
       return true
     })
 
@@ -88,7 +137,7 @@ export default function GraphExplorer() {
     )
 
     return { nodes: filteredNodes, edges: filteredEdges }
-  }, [allNodes, allEdges, selectedDatasource, visibleTypes])
+  }, [allNodes, allEdges, selectedDatasource, selectedTable, visibleTypes])
 
   // Re-scatter positions when filter changes significantly
   const prevCountRef = useRef(0)
@@ -261,6 +310,7 @@ export default function GraphExplorer() {
       const x = hovered.x + 16, y = hovered.y - 10
       const lines = [`${hovered.type}: ${hovered.label}`]
       if (hovered.datasource) lines.push(`Source: ${hovered.datasource}`)
+      ctx.font = '12px Inter, sans-serif'
       const maxW = Math.max(...lines.map((l) => ctx.measureText(l).width))
       const w = maxW + 20
       const h = lines.length * 18 + 10
@@ -273,7 +323,6 @@ export default function GraphExplorer() {
       ctx.lineWidth = 1
       ctx.stroke()
       ctx.fillStyle = labelColor
-      ctx.font = '12px Inter, sans-serif'
       ctx.textAlign = 'left'
       for (let i = 0; i < lines.length; i++) {
         ctx.fillText(lines[i], x + 10, y + 3 + i * 18)
@@ -326,6 +375,14 @@ export default function GraphExplorer() {
     })
   }
 
+  // Build filter description for stats
+  const filterDesc = useMemo(() => {
+    const parts: string[] = []
+    if (selectedDatasource !== '__all__') parts.push(selectedDatasource)
+    if (selectedTable !== '__all__') parts.push(selectedTable)
+    return parts.length ? ` (filtered to ${parts.join(' / ')})` : ''
+  }, [selectedDatasource, selectedTable])
+
   if (loading) return <div className="loading"><div className="spinner" /></div>
   if (error) return <div className="empty-state">Error loading graph: {error}</div>
 
@@ -347,6 +404,20 @@ export default function GraphExplorer() {
             <option value="__all__">All DataSources</option>
             {datasources.map((ds) => (
               <option key={ds} value={ds}>{ds}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="graph-filter-group">
+          <label className="graph-filter-label">Table</label>
+          <select
+            className="graph-filter-select"
+            value={selectedTable}
+            onChange={(e) => setSelectedTable(e.target.value)}
+          >
+            <option value="__all__">All Tables</option>
+            {tables.map((t) => (
+              <option key={t} value={t}>{t}</option>
             ))}
           </select>
         </div>
@@ -394,8 +465,7 @@ export default function GraphExplorer() {
           <h3>Graph Stats</h3>
         </div>
         <p style={{ fontSize: 14, color: 'var(--text-dim)' }}>
-          Showing {nodes.length} nodes, {edges.length} edges
-          {selectedDatasource !== '__all__' && ` (filtered to ${selectedDatasource})`}.
+          Showing {nodes.length} nodes, {edges.length} edges{filterDesc}.
           {allNodes.length !== nodes.length && ` Total: ${allNodes.length} nodes, ${allEdges.length} edges.`}
           {' '}Drag nodes to rearrange.
         </p>

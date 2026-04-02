@@ -188,14 +188,6 @@ DETACH DELETE m
 GRAPH_DATA = """
 MATCH (n)
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
-OPTIONAL MATCH (ds1:DataSource)-[:CONTAINS]->(n) WHERE lbl = 'Table'
-OPTIONAL MATCH (ds2:DataSource)-[:CONTAINS]->(:Table)-[:HAS_COLUMN]->(n) WHERE lbl = 'Column'
-OPTIONAL MATCH (ds3:DataSource)-[:CONTAINS]->(:Table)<-[:DEFINED_ON]-(n) WHERE lbl = 'Metric'
-WITH n, lbl, nid,
-     CASE lbl
-         WHEN 'DataSource' THEN n.name
-         ELSE COALESCE(ds1.name, ds2.name, ds3.name)
-     END AS datasource
 RETURN collect({
     id: toString(nid),
     label: CASE lbl
@@ -206,10 +198,17 @@ RETURN collect({
         WHEN 'BusinessTerm' THEN n.name
         WHEN 'Document' THEN n.name
         WHEN 'Concept' THEN n.name
+        WHEN 'MetadataKey' THEN n.name
         ELSE toString(nid)
     END,
     type: lbl,
-    datasource: datasource,
+    datasource: CASE lbl
+        WHEN 'DataSource' THEN n.name
+        WHEN 'Table' THEN n.database
+        WHEN 'Column' THEN split(n.table, '.')[0]
+        WHEN 'Metric' THEN CASE WHEN n.source_table CONTAINS '.' THEN split(n.source_table, '.')[0] ELSE null END
+        ELSE null
+    END,
     properties: {}
 }) AS nodes
 """
