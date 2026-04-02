@@ -37,8 +37,8 @@ class AthenaConfig:
 
 @dataclass
 class BedrockConfig:
-    query_model: str = "anthropic.claude-sonnet-4-20250514"
-    enrichment_model: str = "anthropic.claude-haiku-4-5-20251001"
+    query_model: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    enrichment_model: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @dataclass

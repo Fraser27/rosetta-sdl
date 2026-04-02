@@ -19,8 +19,8 @@ athena:
 metrics_file: "sample/metrics.yaml"
 
 bedrock:
-  query_model: "anthropic.claude-sonnet-4-20250514"
-  enrichment_model: "anthropic.claude-haiku-4-5-20251001"
+  query_model: "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
+  enrichment_model: "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 allowed_tables: []
 max_query_rows: 500

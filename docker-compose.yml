@@ -29,8 +29,8 @@ services:
       ATHENA_WORKGROUP: semantic-layer-wg
       ATHENA_OUTPUT_BUCKET: ""
       METRICS_FILE: /app/sample/metrics.yaml
-      BEDROCK_QUERY_MODEL: anthropic.claude-sonnet-4-20250514
-      BEDROCK_ENRICHMENT_MODEL: anthropic.claude-haiku-4-5-20251001
+      BEDROCK_QUERY_MODEL: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+      BEDROCK_ENRICHMENT_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0
     depends_on:
       neo4j:
         condition: service_healthy
