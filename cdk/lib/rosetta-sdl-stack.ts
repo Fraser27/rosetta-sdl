@@ -223,6 +223,7 @@ services:
     environment:
       COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
       COGNITO_REGION: "${cdk.Aws.REGION}"
+      AWS_DEFAULT_REGION: "${cdk.Aws.REGION}"
 EOF
 
 /usr/local/bin/docker-compose up -d
