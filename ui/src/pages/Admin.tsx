@@ -49,13 +49,23 @@ export default function Admin() {
         <div className="admin-card">
           <h3>Enrich Metadata</h3>
           <p>Use LLM (Bedrock) to generate descriptions for tables and columns, extract concepts from documents, and create business term mappings.</p>
-          <button
-            className="btn btn-primary"
-            onClick={() => runAction('enrich', api.enrich)}
-            disabled={loading !== null}
-          >
-            {loading === 'enrich' ? 'Enriching...' : 'Run Enrichment'}
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => runAction('enrich', () => api.enrich())}
+              disabled={loading !== null}
+            >
+              {loading === 'enrich' ? 'Enriching...' : 'Enrich New'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={() => runAction('enrich', () => api.enrich(true))}
+              disabled={loading !== null}
+              title="Re-enrich all tables and documents, even those with existing descriptions"
+            >
+              {loading === 'enrich' ? 'Enriching...' : 'Force Re-enrich All'}
+            </button>
+          </div>
         </div>
 
         <div className="admin-card">

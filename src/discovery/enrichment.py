@@ -13,11 +13,12 @@ from src.graph.client import GraphClient
 logger = logging.getLogger(__name__)
 
 
-def enrich_tables(graph: GraphClient, model_id: str) -> dict:
-    """Enrich tables without descriptions using LLM."""
+def enrich_tables(graph: GraphClient, model_id: str, force: bool = False) -> dict:
+    """Enrich tables using LLM. By default only enriches tables without descriptions."""
     bedrock = boto3.client("bedrock-runtime")
+    where = "" if force else "WHERE t.description IS NULL OR t.description = '' "
     tables = graph.query(
-        "MATCH (t:Table) WHERE t.description IS NULL OR t.description = '' "
+        f"MATCH (t:Table) {where}"
         "OPTIONAL MATCH (t)-[:HAS_COLUMN]->(c:Column) "
         "RETURN t.full_name AS full_name, t.name AS name, "
         "collect({name: c.name, type: c.data_type}) AS columns"
@@ -88,11 +89,12 @@ def enrich_tables(graph: GraphClient, model_id: str) -> dict:
     return {"enriched_tables": enriched, "total_tables": len(tables)}
 
 
-def enrich_documents(graph: GraphClient, model_id: str) -> dict:
+def enrich_documents(graph: GraphClient, model_id: str, force: bool = False) -> dict:
     """Enrich documents by extracting concepts and linking to tables."""
     bedrock = boto3.client("bedrock-runtime")
+    where = "" if force else "WHERE d.description IS NULL OR d.description = '' "
     docs = graph.query(
-        "MATCH (d:Document) WHERE d.description IS NULL OR d.description = '' "
+        f"MATCH (d:Document) {where}"
         "RETURN d.s3_key AS s3_key, d.name AS name"
     )
 

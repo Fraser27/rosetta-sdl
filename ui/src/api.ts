@@ -108,6 +108,14 @@ export const api = {
   // Catalog
   listTables: () => request<TableSummary[]>('/catalog/tables'),
   getTable: (name: string) => request<TableDetail>(`/catalog/tables/${name}`),
+  updateTableDescription: (name: string, description: string) =>
+    request<{ ok: boolean }>(`/catalog/tables/${name}/description`, {
+      method: 'PATCH', body: JSON.stringify({ description }),
+    }),
+  updateColumnDescription: (tableName: string, columnName: string, description: string) =>
+    request<{ ok: boolean }>(`/catalog/tables/${tableName}/columns/${columnName}/description`, {
+      method: 'PATCH', body: JSON.stringify({ description }),
+    }),
   search: (q: string) => request<SearchResult[]>(`/catalog/search?q=${encodeURIComponent(q)}`),
   graphSummary: () => request<GraphSummary>('/catalog/graph'),
 
@@ -135,7 +143,7 @@ export const api = {
 
   // Admin
   scan: () => request<Record<string, unknown>>('/admin/scan', { method: 'POST' }),
-  enrich: () => request<Record<string, unknown>>('/admin/enrich', { method: 'POST' }),
+  enrich: (force = false) => request<Record<string, unknown>>(`/admin/enrich${force ? '?force=true' : ''}`, { method: 'POST' }),
   clear: () => request<Record<string, unknown>>('/admin/clear', { method: 'POST' }),
 
   // Graph data for visualization

@@ -75,13 +75,13 @@ async def scan_and_load():
 
 
 @router.post("/enrich")
-async def enrich_metadata():
-    """Trigger LLM-based metadata enrichment for tables and documents."""
+async def enrich_metadata(force: bool = False):
+    """Trigger LLM-based metadata enrichment. Use ?force=true to re-enrich all."""
     graph = _get_graph()
     model_id = _config.bedrock.enrichment_model
 
-    table_result = enrich_tables(graph, model_id)
-    doc_result = enrich_documents(graph, model_id)
+    table_result = enrich_tables(graph, model_id, force=force)
+    doc_result = enrich_documents(graph, model_id, force=force)
 
     return {
         "status": "ok",

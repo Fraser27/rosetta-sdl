@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from src.catalog.models import SearchResult, TableSummary
 from src.graph import queries
@@ -44,6 +45,41 @@ async def get_table_details(table_name: str):
     joins = _get_graph().query(queries.GET_TABLE_JOINS, {"full_name": table_name})
     table["joins"] = joins
     return table
+
+
+class DescriptionUpdate(BaseModel):
+    description: str
+
+
+@router.patch("/tables/{table_name:path}/description")
+async def update_table_description(table_name: str, req: DescriptionUpdate):
+    """Update a table's description."""
+    graph = _get_graph()
+    results = graph.query("MATCH (t:Table {full_name: $fn}) RETURN t", {"fn": table_name})
+    if not results:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+    graph.write(
+        "MATCH (t:Table {full_name: $fn}) SET t.description = $desc",
+        {"fn": table_name, "desc": req.description},
+    )
+    return {"ok": True}
+
+
+@router.patch("/tables/{table_name:path}/columns/{column_name}/description")
+async def update_column_description(table_name: str, column_name: str, req: DescriptionUpdate):
+    """Update a column's description."""
+    graph = _get_graph()
+    results = graph.query(
+        "MATCH (c:Column {name: $name, table: $table}) RETURN c",
+        {"name": column_name, "table": table_name},
+    )
+    if not results:
+        raise HTTPException(404, f"Column '{column_name}' not found in '{table_name}'")
+    graph.write(
+        "MATCH (c:Column {name: $name, table: $table}) SET c.description = $desc",
+        {"name": column_name, "table": table_name, "desc": req.description},
+    )
+    return {"ok": True}
 
 
 @router.get("/tables/{table_name:path}/related")

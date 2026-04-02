@@ -2,19 +2,97 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, type TableDetail as TableDetailType } from '../api'
 
+function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (draft === value) { setEditing(false); return }
+    setSaving(true)
+    try {
+      await onSave(draft)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSave()
+    if (e.key === 'Escape') { setDraft(value); setEditing(false) }
+  }
+
+  if (!editing) {
+    return (
+      <span
+        onClick={() => setEditing(true)}
+        style={{ cursor: 'pointer', color: value ? 'var(--text-dim)' : 'var(--text-dim)', fontSize: 13, borderBottom: '1px dashed var(--border)' }}
+        title="Click to edit"
+      >
+        {value || 'Click to add description...'}
+      </span>
+    )
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={handleSave}
+        autoFocus
+        style={{ fontSize: 13, padding: '2px 6px', minWidth: 200 }}
+      />
+      {saving && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>saving...</span>}
+    </span>
+  )
+}
+
 export default function TableDetail() {
   const { name } = useParams<{ name: string }>()
   const [table, setTable] = useState<TableDetailType | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
-  useEffect(() => {
+  const load = () => {
     if (!name) return
     api.getTable(name)
       .then(setTable)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [name])
+  }
+
+  useEffect(() => { load() }, [name])
+
+  const showToast = (msg: string, type = 'success') => {
+    setToast({ msg, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
+  const handleTableDescSave = async (desc: string) => {
+    if (!name) return
+    await api.updateTableDescription(name, desc)
+    setTable((t) => t ? { ...t, description: desc } : t)
+    showToast('Table description updated')
+  }
+
+  const handleColumnDescSave = async (colName: string, desc: string) => {
+    if (!name) return
+    await api.updateColumnDescription(name, colName, desc)
+    setTable((t) => {
+      if (!t) return t
+      return {
+        ...t,
+        columns: t.columns.map((c) =>
+          c.name === colName ? { ...c, description: desc } : c
+        ),
+      }
+    })
+    showToast(`Column "${colName}" description updated`)
+  }
 
   if (loading) return <div className="loading"><div className="spinner" /></div>
   if (error) return <div className="empty-state">Error: {error}</div>
@@ -26,7 +104,7 @@ export default function TableDetail() {
 
       <div className="page-header">
         <h2>{table.name}</h2>
-        <p>{table.description || table.full_name}</p>
+        <InlineEdit value={table.description || ''} onSave={handleTableDescSave} />
       </div>
 
       <div className="detail-grid">
@@ -79,7 +157,12 @@ export default function TableDetail() {
               <tr key={c.name}>
                 <td><strong>{c.name}</strong></td>
                 <td><code style={{ fontSize: 12 }}>{c.data_type}</code></td>
-                <td style={{ color: 'var(--text-dim)', fontSize: 13 }}>{c.description}</td>
+                <td>
+                  <InlineEdit
+                    value={c.description || ''}
+                    onSave={(desc) => handleColumnDescSave(c.name, desc)}
+                  />
+                </td>
                 <td>{c.is_partition && <span className="tag tag-orange">partition</span>}</td>
                 <td>{c.is_primary_key && <span className="tag tag-green">PK</span>}</td>
               </tr>
@@ -87,6 +170,8 @@ export default function TableDetail() {
           </tbody>
         </table>
       </div>
+
+      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
     </>
   )
 }
