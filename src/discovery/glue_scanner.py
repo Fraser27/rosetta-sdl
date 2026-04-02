@@ -3,13 +3,44 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 
 import boto3
 
-from src.catalog.models import ColumnMeta, TableMeta
+from src.catalog.models import ColumnMeta, JoinPath, TableMeta
 from src.config import DatabaseConfig
 
 logger = logging.getLogger(__name__)
+
+
+def discover_all_databases() -> list[TableMeta]:
+    """Auto-discover ALL Glue databases and scan every table in each."""
+    glue = boto3.client("glue")
+    all_tables: list[TableMeta] = []
+
+    logger.info("Auto-discovering all Glue databases...")
+    db_paginator = glue.get_paginator("get_databases")
+    db_names: list[str] = []
+
+    for page in db_paginator.paginate():
+        for db in page.get("DatabaseList", []):
+            db_names.append(db["Name"])
+
+    logger.info("Found %d Glue databases: %s", len(db_names), db_names)
+
+    for db_name in db_names:
+        logger.info("Scanning Glue database: %s", db_name)
+        try:
+            paginator = glue.get_paginator("get_tables")
+            for page in paginator.paginate(DatabaseName=db_name):
+                for glue_table in page.get("TableList", []):
+                    table = _parse_glue_table(glue_table, db_name, "glue")
+                    all_tables.append(table)
+        except Exception as e:
+            logger.error("Error scanning database '%s': %s", db_name, e)
+
+    logger.info("Discovered %d tables across %d databases", len(all_tables), len(db_names))
+    return all_tables
 
 
 def scan_databases(databases: list[DatabaseConfig]) -> list[TableMeta]:
@@ -34,6 +65,51 @@ def scan_databases(databases: list[DatabaseConfig]) -> list[TableMeta]:
 
     logger.info("Discovered %d tables across %d databases", len(all_tables), len(databases))
     return all_tables
+
+
+def infer_joins(tables: list[TableMeta]) -> list[JoinPath]:
+    """Detect potential join paths by matching column names across tables.
+
+    For each pair of tables (including cross-database), if they share a column
+    name, create a join path. Skips generic columns that would produce noise.
+    """
+    SKIP_COLUMNS = {
+        "year", "month", "day", "date", "timestamp", "created_at", "updated_at",
+        "partition_0", "partition_1", "partition_2", "partition_3",
+    }
+
+    # Build index: column_name -> list of table full_names
+    col_to_tables: dict[str, list[str]] = defaultdict(list)
+    table_cols: dict[str, set[str]] = {}
+
+    for table in tables:
+        col_names = {c.name.lower() for c in table.columns} - SKIP_COLUMNS
+        table_cols[table.full_name] = col_names
+        for col in col_names:
+            col_to_tables[col].append(table.full_name)
+
+    joins: list[JoinPath] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for col_name, table_list in col_to_tables.items():
+        if len(table_list) < 2:
+            continue
+        # Create join for each unique pair
+        for i, src in enumerate(table_list):
+            for tgt in table_list[i + 1:]:
+                key = (min(src, tgt), max(src, tgt), col_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                joins.append(JoinPath(
+                    source_table=src,
+                    target_table=tgt,
+                    on_column=col_name,
+                    join_type="INNER",
+                ))
+
+    logger.info("Inferred %d potential join paths from column name matching", len(joins))
+    return joins
 
 
 def _parse_glue_table(glue_table: dict, database: str, catalog_type: str) -> TableMeta:

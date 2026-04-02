@@ -53,6 +53,18 @@ export function login(): void {
   window.location.href = `https://${getDomain()}/login?${params}`;
 }
 
+/** Redirect to Cognito Hosted UI for signup */
+export function signup(): void {
+  if (!isAuthEnabled()) return;
+  const params = new URLSearchParams({
+    client_id: getClientId(),
+    response_type: 'token',
+    scope: 'openid email profile',
+    redirect_uri: getRedirectUri(),
+  });
+  window.location.href = `https://${getDomain()}/signup?${params}`;
+}
+
 /** Redirect to Cognito for logout */
 export function logout(): void {
   clearTokens();

@@ -253,27 +253,34 @@ Or create metrics visually in the Admin UI at `/metrics`.
 ### Architecture
 
 ```
-┌──────────────────┐     ┌─────────────────────────────────┐
-│   App Runner      │     │  EC2 (t4g.medium, 30GB gp3)     │
-│   React UI        │────▶│                                  │
-│   (nginx, HTTPS)  │     │  Docker Compose:                 │
-│   0.25 vCPU       │     │  ├── Neo4j 5 CE  (:7474, :7687) │
-└────────┬─────────┘     │  └── FastAPI     (:8000)         │
-         │                │                                  │
-         │                │  IAM: Glue, Athena, S3,          │
-    ┌────▼────┐           │  S3 Vectors, Bedrock             │
-    │ Cognito │           └─────────────────────────────────┘
-    │ User    │                         ▲
-    │ Pool    │─── JWT validation ──────┘
-    └─────────┘
+                    Internet
+                       |
+              +--------v--------+
+              |   CloudFront    |
+              |  UI (S3) + API  |
+              +---+----------+--+
+                  |          |
+         S3 (UI) |          | /api/*
+                  |    +-----v--------+
+                  |    |     ALB      |  <-- Public subnet
+                  |    | (HTTP:80)    |
+                  |    +-----+-------+
+                  |          |
+            ------+----------+-------- Private subnet ---
+                  |    +-----v--------------+
+                  |    |       EC2           |
+                  |    |  FastAPI + Neo4j    |
+                  |    |  (Docker Compose)   |
+                  |    +--------------------+
 ```
 
 | Component | Service | Spec |
 |-----------|---------|------|
-| **React UI** | App Runner | 0.25 vCPU, 512MB, nginx, auto-HTTPS |
-| **FastAPI + Neo4j** | EC2 | t4g.medium (ARM64), 30GB gp3 EBS, Docker Compose |
-| **Auth** | Cognito | User Pool, email sign-in, JWT tokens |
-| **Access** | SSM | No SSH keys — `aws ssm start-session` |
+| **React UI** | S3 + CloudFront | CDN, HTTPS, SPA routing |
+| **API Gateway** | ALB | Public subnet, forwards to EC2:8000 |
+| **FastAPI + Neo4j** | EC2 (private subnet) | t4g.medium (ARM64), 30GB gp3 EBS, Docker Compose |
+| **Auth** | Cognito | Hosted UI, email sign-in, JWT tokens |
+| **Access** | SSM | No SSH keys, no public IP - `aws ssm start-session` |
 
 ### Deploy with CDK
 
@@ -291,43 +298,49 @@ npx cdk deploy
 CDK outputs:
 
 ```
-RosettaSdlStack.Ec2PublicIp = 54.xxx.xxx.xxx
-RosettaSdlStack.AppRunnerUrl = https://xxxxx.us-east-1.awsapprunner.com
+RosettaSdlStack.CloudFrontUrl = https://xxxxx.cloudfront.net
+RosettaSdlStack.AlbDnsName = Rosett-Alb-xxxxx.us-east-1.elb.amazonaws.com
 RosettaSdlStack.CognitoUserPoolId = us-east-1_XXXXXXX
 RosettaSdlStack.CognitoClientId = xxxxxxxxxxxxxxxxx
-RosettaSdlStack.SshCommand = aws ssm start-session --target i-xxxxxxxxx
+RosettaSdlStack.CognitoDomain = https://semantic-layer-xxxx.auth.us-east-1.amazoncognito.com
+RosettaSdlStack.SsmCommand = aws ssm start-session --target i-xxxxxxxxx
 ```
 
-### Post-deploy setup
+### Post-deploy: Fix Cognito settings
+
+CDK may not correctly apply self-signup and email verification settings. Run these commands after deployment using the `CognitoUserPoolId` from the CDK outputs:
 
 ```bash
-# Connect to EC2
+# Enable self-signup (allow users to register)
+aws cognito-idp update-user-pool \
+  --user-pool-id <CognitoUserPoolId> \
+  --admin-create-user-config AllowAdminCreateUserOnly=false
+
+# Enable email auto-verification (required for signup flow)
+aws cognito-idp update-user-pool \
+  --user-pool-id <CognitoUserPoolId> \
+  --auto-verified-attributes email
+```
+
+Verify the settings:
+
+```bash
+aws cognito-idp describe-user-pool \
+  --user-pool-id <CognitoUserPoolId> \
+  --query 'UserPool.{AllowAdminCreateUserOnly:AdminCreateUserConfig.AllowAdminCreateUserOnly,AutoVerifiedAttributes:AutoVerifiedAttributes}'
+# Expected: {"AllowAdminCreateUserOnly": false, "AutoVerifiedAttributes": ["email"]}
+```
+
+### Post-deploy: Seed demo data
+
+```bash
+# Connect to EC2 via SSM
 aws ssm start-session --target <instance-id>
 
-# Navigate to app
-cd /opt/rosetta-sdl
-
-# Clone your code (or scp it)
-git clone https://github.com/Fraser27/rosetta-sdl.git .
-
-# Start services
-docker-compose up -d
-
-# Seed demo data
+# Seed the demo graph
+cd /opt/semantic-layer
 cat sample/seed_graph.cypher | docker exec -i \
   $(docker ps -q -f name=neo4j) cypher-shell -u neo4j -p semantic-layer
-```
-
-### Update App Runner callback URL
-
-After deployment, update the Cognito App Client callback URL with the actual App Runner URL:
-
-```bash
-aws cognito-idp update-user-pool-client \
-  --user-pool-id <pool-id> \
-  --client-id <client-id> \
-  --callback-urls "https://<apprunner-url>/" \
-  --logout-urls "https://<apprunner-url>/"
 ```
 
 ---

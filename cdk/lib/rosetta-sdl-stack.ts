@@ -128,32 +128,24 @@ systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
 
-# Install Docker Compose
+# Install Docker Compose + Buildx
 ARCH=$(uname -m)
 curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$ARCH" -o /usr/local/bin/docker-compose
 chmod +x /usr/local/bin/docker-compose
+
+# Install Buildx plugin (required by compose build)
+BUILDX_ARCH=$ARCH
+if [ "$BUILDX_ARCH" = "aarch64" ]; then BUILDX_ARCH="arm64"; fi
+if [ "$BUILDX_ARCH" = "x86_64" ]; then BUILDX_ARCH="amd64"; fi
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -L "https://github.com/docker/buildx/releases/download/v0.21.2/buildx-v0.21.2.linux-$BUILDX_ARCH" -o /usr/local/lib/docker/cli-plugins/docker-buildx
+chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # Clone the repo
 git clone https://github.com/Fraser27/rosetta-sdl.git /opt/semantic-layer
 cd /opt/semantic-layer
 
-# Override docker-compose with production config
-cat > docker-compose.override.yml << 'OVERRIDE_EOF'
-services:
-  neo4j:
-    restart: always
-    environment:
-      NEO4J_server_memory_heap_initial__size: 512m
-      NEO4J_server_memory_heap_max__size: 1g
-
-  rosetta:
-    restart: always
-    environment:
-      COGNITO_USER_POOL_ID: "__COGNITO_POOL_ID__"
-      COGNITO_REGION: "${cdk.Aws.REGION}"
-OVERRIDE_EOF
-
-# Build and start
+# Build Neo4j + FastAPI (without Cognito config yet — added after user pool is created)
 /usr/local/bin/docker-compose up -d --build
 
 echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
@@ -214,6 +206,27 @@ echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
         domainPrefix: `semantic-layer-${cdk.Aws.ACCOUNT_ID}`,
       },
     });
+
+    // Write docker-compose override with real Cognito config and restart
+    instance.addUserData(`
+cd /opt/semantic-layer
+cat > docker-compose.override.yml << EOF
+services:
+  neo4j:
+    restart: always
+    environment:
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+
+  rosetta:
+    restart: always
+    environment:
+      COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
+      COGNITO_REGION: "${cdk.Aws.REGION}"
+EOF
+
+/usr/local/bin/docker-compose up -d
+`);
 
     // ─────────────────────────────────────────────
     // S3 Bucket — React UI hosting
@@ -324,14 +337,6 @@ function handler(event) {
             ],
           },
         }),
-      ],
-      destinationBucket: uiBucket,
-      distribution,
-      distributionPaths: ['/*'],
-    });
-
-    new s3deploy.BucketDeployment(this, 'UiConfig', {
-      sources: [
         s3deploy.Source.jsonData('runtime-config.json', {
           cognitoUserPoolId: userPool.userPoolId,
           cognitoClientId: userPoolClient.userPoolClientId,
@@ -341,8 +346,7 @@ function handler(event) {
       ],
       destinationBucket: uiBucket,
       distribution,
-      distributionPaths: ['/runtime-config.json'],
-      prune: false,
+      distributionPaths: ['/*'],
     });
 
     // ─────────────────────────────────────────────

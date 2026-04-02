@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from src.config import SemanticLayerConfig
 from src.discovery.enrichment import enrich_documents, enrich_tables
-from src.discovery.glue_scanner import scan_databases
+from src.discovery.glue_scanner import discover_all_databases, infer_joins, scan_databases
 from src.discovery.s3vectors_scanner import scan_vector_buckets
 from src.graph.client import GraphClient
 from src.graph.loader import load_documents, load_metrics, load_structured
@@ -40,18 +40,26 @@ async def scan_and_load():
     graph = _get_graph()
     summary = {"tables": 0, "columns": 0, "metrics": 0, "documents": 0, "joins": 0}
 
-    # 1. Scan Glue databases
+    # 1. Scan Glue databases (auto-discover all if none configured)
     if _config.databases:
         tables = scan_databases(_config.databases)
+    else:
+        tables = discover_all_databases()
+
+    if tables:
         summary["tables"] = len(tables)
         summary["columns"] = sum(len(t.columns) for t in tables)
 
         # Load metrics + join paths from YAML
-        metrics, joins = load_metrics_yaml(_config.metrics_file)
-        summary["joins"] = len(joins)
+        metrics, yaml_joins = load_metrics_yaml(_config.metrics_file)
+
+        # Infer cross-database joins from matching column names
+        inferred_joins = infer_joins(tables)
+        all_joins = yaml_joins + inferred_joins
+        summary["joins"] = len(all_joins)
 
         # Load into graph
-        load_structured(graph, tables, joins)
+        load_structured(graph, tables, all_joins)
         load_metrics(graph, metrics)
         summary["metrics"] = len(metrics)
 
