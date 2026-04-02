@@ -7,6 +7,7 @@ import Tables from './pages/Tables'
 import TableDetail from './pages/TableDetail'
 import Metrics from './pages/Metrics'
 import GraphExplorer from './pages/GraphExplorer'
+import QueryBuilder from './pages/QueryBuilder'
 import Admin from './pages/Admin'
 import Login from './pages/Login'
 
@@ -54,6 +55,7 @@ function App() {
           <NavLink to="/" end>Dashboard</NavLink>
           <NavLink to="/tables">Tables</NavLink>
           <NavLink to="/metrics">Metrics</NavLink>
+          <NavLink to="/query-builder">Query Builder</NavLink>
           <NavLink to="/graph">Graph Explorer</NavLink>
           <NavLink to="/admin">Admin</NavLink>
         </nav>
@@ -84,6 +86,7 @@ function App() {
           <Route path="/tables" element={<Tables />} />
           <Route path="/tables/:name" element={<TableDetail />} />
           <Route path="/metrics" element={<Metrics />} />
+          <Route path="/query-builder" element={<QueryBuilder />} />
           <Route path="/graph" element={<GraphExplorer />} />
           <Route path="/admin" element={<Admin />} />
         </Routes>

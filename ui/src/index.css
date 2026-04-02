@@ -338,6 +338,77 @@ a:hover { text-decoration: underline; }
   margin-top: 20px;
 }
 
+.metric-join-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.metric-join-row input,
+.metric-join-row select {
+  padding: 6px 8px;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+}
+
+.metric-join-row input:focus,
+.metric-join-row select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.base-metric-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.base-metric-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.base-metric-option:hover { background: var(--bg-hover); }
+.base-metric-option.selected { background: var(--accent-light); border-color: var(--accent); }
+.base-metric-option input[type="checkbox"] { margin: 0; }
+
+.qb-metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.qb-metric-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.qb-metric-item:hover { background: var(--bg-hover); }
+.qb-metric-item.selected { background: var(--accent-light); border-color: var(--accent); }
+.qb-metric-item input[type="checkbox"] { margin-top: 3px; }
+
 .search-bar { position: relative; margin-bottom: 20px; }
 
 .search-bar input {

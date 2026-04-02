@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.catalog.models import MetricSummary
+from src.catalog.models import MetricJoin, MetricSummary
 from src.config import SemanticLayerConfig
 from src.graph import queries
 from src.graph.client import GraphClient
@@ -40,6 +42,8 @@ class MetricCreateRequest(BaseModel):
     expression: str
     type: str = "simple"
     source_table: str = ""
+    joins: list[MetricJoin] = Field(default_factory=list)
+    base_metrics: list[str] = Field(default_factory=list)
     synonyms: list[str] = Field(default_factory=list)
     grain: list[str] = Field(default_factory=list)
     filters: list[str] = Field(default_factory=list)
@@ -53,10 +57,24 @@ class MetricQueryRequest(BaseModel):
     limit: int | None = None
 
 
+def _parse_joins(raw: str | list | None) -> list[dict]:
+    """Parse joins_json from Neo4j into a list of dicts."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return raw
+
+
 @router.get("", response_model=list[MetricSummary])
 async def list_metrics():
     """List all governed metrics."""
     results = _get_graph().query(queries.LIST_METRICS)
+    for r in results:
+        r["joins"] = _parse_joins(r.pop("joins_json", None))
     return [MetricSummary(**r) for r in results]
 
 
@@ -66,7 +84,9 @@ async def get_metric(metric_id: str):
     results = _get_graph().query(queries.GET_METRIC, {"metric_id": metric_id})
     if not results:
         raise HTTPException(404, f"Metric '{metric_id}' not found")
-    return results[0]
+    result = results[0]
+    result["joins"] = _parse_joins(result.pop("joins_json", None))
+    return result
 
 
 @router.post("/{metric_id}/query")
@@ -114,33 +134,9 @@ async def query_metric(metric_id: str, request: MetricQueryRequest):
     }
 
 
-@router.post("")
-async def create_metric(req: MetricCreateRequest):
-    """Create a new governed metric in the graph."""
-    graph = _get_graph()
-    existing = graph.query(queries.GET_METRIC, {"metric_id": req.metric_id})
-    if existing and existing[0].get("name"):
-        raise HTTPException(409, f"Metric '{req.metric_id}' already exists")
-    graph.write(queries.MERGE_METRIC, {
-        "metric_id": req.metric_id,
-        "name": req.name,
-        "definition": req.definition,
-        "expression": req.expression,
-        "type": req.type,
-        "source_table": req.source_table,
-        "synonyms": req.synonyms,
-        "synonyms_text": " ".join(req.synonyms),
-        "grain": req.grain,
-        "filters": req.filters,
-        "time_grains": req.time_grains,
-    })
-    return {"ok": True, "metric_id": req.metric_id}
-
-
-@router.put("/{metric_id}")
-async def update_metric(metric_id: str, req: MetricCreateRequest):
-    """Update an existing governed metric."""
-    graph = _get_graph()
+def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -> None:
+    """Shared logic for creating/updating a metric node and its relationships."""
+    joins_json = json.dumps([j.model_dump() for j in req.joins]) if req.joins else "[]"
     graph.write(queries.MERGE_METRIC, {
         "metric_id": metric_id,
         "name": req.name,
@@ -153,7 +149,35 @@ async def update_metric(metric_id: str, req: MetricCreateRequest):
         "grain": req.grain,
         "filters": req.filters,
         "time_grains": req.time_grains,
+        "joins_json": joins_json,
+        "base_metrics": req.base_metrics,
     })
+    # Manage DERIVES_FROM relationships for derived metrics
+    graph.write(queries.CLEAR_DERIVED_LINKS, {"metric_id": metric_id})
+    if req.type == "derived" and req.base_metrics:
+        for base_id in req.base_metrics:
+            graph.write(queries.LINK_DERIVED_METRIC, {
+                "derived_id": metric_id,
+                "base_id": base_id,
+            })
+
+
+@router.post("")
+async def create_metric(req: MetricCreateRequest):
+    """Create a new governed metric in the graph."""
+    graph = _get_graph()
+    existing = graph.query(queries.GET_METRIC, {"metric_id": req.metric_id})
+    if existing and existing[0].get("name"):
+        raise HTTPException(409, f"Metric '{req.metric_id}' already exists")
+    _save_metric(graph, req.metric_id, req)
+    return {"ok": True, "metric_id": req.metric_id}
+
+
+@router.put("/{metric_id}")
+async def update_metric(metric_id: str, req: MetricCreateRequest):
+    """Update an existing governed metric."""
+    graph = _get_graph()
+    _save_metric(graph, metric_id, req)
     return {"ok": True, "metric_id": metric_id}
 
 

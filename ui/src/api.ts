@@ -64,6 +64,13 @@ export interface TableDetail {
   joins: { related_table: string; on_column: string; join_type: string }[];
 }
 
+export interface MetricJoin {
+  table: string;
+  source_column: string;
+  target_column: string;
+  join_type: string;
+}
+
 export interface Metric {
   metric_id: string;
   name: string;
@@ -71,6 +78,8 @@ export interface Metric {
   expression: string;
   type: string;
   source_table: string;
+  joins: MetricJoin[];
+  base_metrics: string[] | null;
   synonyms: string[] | null;
   grain: string[] | null;
   filters?: string[];
@@ -110,6 +119,16 @@ export const api = {
     request<Metric>(`/metrics/${id}`, { method: 'PUT', body: JSON.stringify(m) }),
   deleteMetric: (id: string) =>
     request<{ ok: boolean }>(`/metrics/${id}`, { method: 'DELETE' }),
+  composeMetrics: (metric_ids: string[], dimensions: string[], limit?: number) =>
+    request<{ sql: string; metric: string; results?: unknown }>('/query/compose', {
+      method: 'POST',
+      body: JSON.stringify({ metric_ids, dimensions, limit }),
+    }),
+  executeComposed: (metric_ids: string[], dimensions: string[], limit?: number) =>
+    request<{ sql: string; metric: string; results: unknown }>('/query/compose', {
+      method: 'POST',
+      body: JSON.stringify({ metric_ids, dimensions, limit, execute: true }),
+    }),
 
   // Admin
   scan: () => request<Record<string, unknown>>('/admin/scan', { method: 'POST' }),

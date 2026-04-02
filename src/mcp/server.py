@@ -155,10 +155,14 @@ def list_metrics() -> str:
 
     lines = [f"Governed Metrics ({len(data)}):\n"]
     for m in data:
-        lines.append(f"  {m['name']} (ID: {m['metric_id']})")
+        mtype = m.get('type', 'simple')
+        lines.append(f"  {m['name']} (ID: {m['metric_id']}, type: {mtype})")
         lines.append(f"    Definition: {m.get('definition', 'N/A')[:100]}")
         lines.append(f"    Expression: {m.get('expression', 'N/A')}")
-        lines.append(f"    Source: {m.get('source_table', 'N/A')}")
+        if mtype == 'derived' and m.get('base_metrics'):
+            lines.append(f"    Composes: {', '.join(m['base_metrics'])}")
+        else:
+            lines.append(f"    Source: {m.get('source_table', 'N/A')}")
         if m.get("synonyms"):
             lines.append(f"    Also known as: {', '.join(m['synonyms'])}")
     return "\n".join(lines)
@@ -178,14 +182,21 @@ def get_metric_definition(metric_id: str) -> str:
             return f"Metric '{metric_id}' not found."
         raise
 
+    mtype = m.get('type', 'simple')
     lines = [
         f"Metric: {m['name']}",
         f"ID: {m['metric_id']}",
-        f"Type: {m.get('type', 'simple')}",
+        f"Type: {mtype}",
         f"Definition: {m.get('definition', 'N/A')}",
         f"SQL Expression: {m.get('expression', 'N/A')}",
-        f"Source Table: {m.get('source_table', 'N/A')}",
     ]
+    if mtype == 'derived' and m.get('base_metrics'):
+        lines.append(f"Base Metrics: {', '.join(m['base_metrics'])}")
+    else:
+        lines.append(f"Source Table: {m.get('source_table', 'N/A')}")
+    if m.get("joins"):
+        for j in m["joins"]:
+            lines.append(f"  Join: {j.get('join_type','INNER')} {j['table']} ON {j['source_column']}={j['target_column']}")
     if m.get("filters"):
         lines.append(f"Filters: {m['filters']}")
     if m.get("grain"):
@@ -325,6 +336,65 @@ def search_documents(query: str) -> str:
         if vr.get("data"):
             lines.append(f"  Content: {str(vr['data'])[:200]}")
         lines.append("")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def compose_metrics(
+    metric_ids: str,
+    dimensions: str = "",
+    limit: int = 100,
+    execute: bool = False,
+) -> str:
+    """Compose multiple governed metrics into a single CTE query.
+
+    Each metric becomes a WITH clause, joined on shared dimensions.
+    Fully governed — no LLM involved.
+
+    Args:
+        metric_ids: Comma-separated metric IDs (e.g., "m_001,m_002")
+        dimensions: Comma-separated shared dimension columns (e.g., "region,order_date")
+        limit: Max rows (default 100)
+        execute: If True, also execute the query on Athena
+    """
+    ids = [s.strip() for s in metric_ids.split(",") if s.strip()]
+    if len(ids) < 2:
+        return "Error: At least 2 metric IDs required for composition."
+
+    dims = [d.strip() for d in dimensions.split(",") if d.strip()] if dimensions else []
+
+    try:
+        data = _post("/query/compose", body={
+            "metric_ids": ids,
+            "dimensions": dims,
+            "limit": limit,
+            "execute": execute,
+        })
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code in (400, 403):
+            return f"Error: {e.response.json().get('detail', 'Query error')}"
+        raise
+
+    lines = [
+        f"Composed Metric: {data.get('metric', 'N/A')}",
+        f"Query Type: {data.get('query_type', 'governed')}",
+        f"SQL:\n{data.get('sql', 'N/A')}",
+    ]
+
+    results = data.get("results")
+    if results:
+        columns = results.get("columns", [])
+        rows = results.get("rows", [])
+        lines.extend([
+            f"\nResults ({results.get('row_count', 0)} rows, {results.get('duration_ms', 0):.0f}ms):",
+            " | ".join(columns),
+            "-" * max(len(" | ".join(columns)), 1),
+        ])
+        for row in rows[:50]:
+            lines.append(" | ".join(str(v) for v in row))
+        if len(rows) > 50:
+            lines.append(f"... {len(rows) - 50} more rows")
+
     return "\n".join(lines)
 
 

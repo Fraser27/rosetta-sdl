@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from src.catalog.models import QueryPlan, QueryResponse
 from src.config import SemanticLayerConfig
 from src.graph.client import GraphClient
-from src.metrics.compiler import compile_metric
+from src.metrics.compiler import compile_metric, compose_metrics, FilterClause as CompilerFilter
 from src.query.athena_executor import execute_query
 from src.query.disambiguator import disambiguate
 from src.query.firewall import SQLFirewall
@@ -241,3 +241,62 @@ async def plan_query_endpoint(request: NLQueryRequest):
             plan.query_type = "document"
 
     return plan
+
+
+class ComposeRequest(BaseModel):
+    """Compose multiple metrics into a single CTE query."""
+    metric_ids: list[str]
+    dimensions: list[str] = Field(default_factory=list)
+    filters: list[dict] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    limit: int | None = None
+    execute: bool = False
+
+
+@router.post("/compose")
+async def compose_metrics_endpoint(request: ComposeRequest):
+    """Compose multiple governed metrics into a CTE query, optionally execute it."""
+    graph = _get_graph()
+
+    if len(request.metric_ids) < 2:
+        raise HTTPException(400, "At least 2 metric IDs required for composition")
+
+    filter_clauses = [
+        CompilerFilter(column=f["column"], operator=f.get("operator", "="), value=f["value"])
+        for f in request.filters
+    ]
+
+    compiled = compose_metrics(
+        metric_ids=request.metric_ids,
+        graph=graph,
+        dimensions=request.dimensions,
+        filters=filter_clauses,
+        order_by=request.order_by,
+        limit=request.limit or _config.max_query_rows,
+    )
+
+    if not compiled.is_valid:
+        raise HTTPException(400, f"Compilation error: {'; '.join(compiled.errors)}")
+
+    # Firewall check
+    if _firewall:
+        fw = _firewall.validate(compiled.sql)
+        if not fw.allowed:
+            raise HTTPException(403, fw.reason)
+
+    response = {
+        "metric": compiled.metric_name,
+        "sql": compiled.sql,
+        "query_type": "governed",
+    }
+
+    if request.execute:
+        result = execute_query(
+            sql=compiled.sql,
+            workgroup=_config.athena.workgroup,
+            output_location=_config.athena.output_bucket,
+            max_rows=request.limit or _config.max_query_rows,
+        )
+        response["results"] = result
+
+    return response

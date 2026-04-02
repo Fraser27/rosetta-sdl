@@ -52,14 +52,50 @@ export default function GraphExplorer() {
       .finally(() => setLoading(false))
   }, [])
 
+  // Build datasource membership from graph edges (more reliable than Cypher properties)
+  const nodeToDatasource = useMemo(() => {
+    const map = new Map<string, string>()
+
+    // DataSource nodes own themselves
+    for (const n of allNodes) {
+      if (n.type === 'DataSource') map.set(n.id, n.label)
+    }
+
+    // CONTAINS: DataSource -> Table
+    for (const e of allEdges) {
+      if (e.type === 'CONTAINS' && map.has(e.source)) {
+        map.set(e.target, map.get(e.source)!)
+      }
+    }
+
+    // HAS_COLUMN: Table -> Column (inherit datasource from parent table)
+    for (const e of allEdges) {
+      if (e.type === 'HAS_COLUMN' && map.has(e.source)) {
+        map.set(e.target, map.get(e.source)!)
+      }
+    }
+
+    // MEASURES: Metric -> Table (inherit datasource from measured table)
+    for (const e of allEdges) {
+      if (e.type === 'MEASURES' && map.has(e.target)) {
+        map.set(e.source, map.get(e.target)!)
+      }
+    }
+
+    // HAS_METADATA_KEY: Document -> MetadataKey
+    for (const e of allEdges) {
+      if (e.type === 'HAS_METADATA_KEY' && map.has(e.source)) {
+        map.set(e.target, map.get(e.source)!)
+      }
+    }
+
+    return map
+  }, [allNodes, allEdges])
+
   // Extract unique datasources
   const datasources = useMemo(() => {
-    const ds = new Set<string>()
-    for (const n of allNodes) {
-      if (n.datasource) ds.add(n.datasource)
-    }
-    return Array.from(ds).sort()
-  }, [allNodes])
+    return Array.from(new Set(nodeToDatasource.values())).sort()
+  }, [nodeToDatasource])
 
   // Extract tables for the selected datasource
   const tables = useMemo(() => {
@@ -67,11 +103,11 @@ export default function GraphExplorer() {
       .filter((n) => {
         if (n.type !== 'Table') return false
         if (selectedDatasource === '__all__') return true
-        return n.datasource === selectedDatasource
+        return nodeToDatasource.get(n.id) === selectedDatasource
       })
       .map((n) => n.label)
       .sort()
-  }, [allNodes, selectedDatasource])
+  }, [allNodes, selectedDatasource, nodeToDatasource])
 
   // Reset table filter when datasource changes
   useEffect(() => {
@@ -126,8 +162,9 @@ export default function GraphExplorer() {
     const filteredNodes = allNodes.filter((n) => {
       if (!visibleTypes.has(n.type)) return false
       if (selectedDatasource === '__all__') return true
-      if (n.type === 'DataSource') return n.label === selectedDatasource
-      if (n.datasource) return n.datasource === selectedDatasource
+      const ds = nodeToDatasource.get(n.id)
+      if (ds) return ds === selectedDatasource
+      // Nodes without a datasource (e.g. BusinessTerm, Concept): show always
       return true
     })
 
@@ -137,7 +174,7 @@ export default function GraphExplorer() {
     )
 
     return { nodes: filteredNodes, edges: filteredEdges }
-  }, [allNodes, allEdges, selectedDatasource, selectedTable, visibleTypes])
+  }, [allNodes, allEdges, selectedDatasource, selectedTable, visibleTypes, nodeToDatasource])
 
   // Re-scatter positions when filter changes significantly
   const prevCountRef = useRef(0)

@@ -34,14 +34,23 @@ class JoinPath(BaseModel):
     join_type: str = "INNER"
 
 
+class MetricJoin(BaseModel):
+    table: str  # fully-qualified table name (e.g. "ecommerce.customers")
+    source_column: str  # column on the source/left table
+    target_column: str  # column on the joined table
+    join_type: str = "INNER"  # INNER | LEFT | RIGHT
+
+
 class MetricDefinition(BaseModel):
     metric_id: str
     name: str
     synonyms: list[str] = Field(default_factory=list)
     definition: str = ""
     type: str = "simple"  # simple | derived
-    expression: str  # SQL aggregate expression
-    source_table: str  # fully-qualified table name
+    expression: str  # SQL aggregate expression (for derived: e.g. "total_revenue - total_cost")
+    source_table: str = ""  # fully-qualified table name (empty for derived)
+    joins: list[MetricJoin] = Field(default_factory=list)
+    base_metrics: list[str] = Field(default_factory=list)  # metric IDs this derived metric composes
     filters: list[str] = Field(default_factory=list)
     grain: list[str] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
@@ -76,6 +85,8 @@ class MetricSummary(BaseModel):
     expression: str = ""
     type: str = "simple"
     source_table: str = ""
+    joins: list[MetricJoin] = Field(default_factory=list)
+    base_metrics: list[str] | None = Field(default_factory=list)
     synonyms: list[str] | None = Field(default_factory=list)
     grain: list[str] | None = Field(default_factory=list)
 
