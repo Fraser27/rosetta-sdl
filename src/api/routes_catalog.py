@@ -91,6 +91,36 @@ async def get_related_tables(table_name: str):
     return {"table": table_name, "related": joins}
 
 
+@router.get("/documents")
+async def list_documents():
+    """List all documents in the semantic layer."""
+    results = _get_graph().query(queries.LIST_DOCUMENTS)
+    return results
+
+
+@router.get("/documents/{s3_key:path}")
+async def get_document(s3_key: str):
+    """Get full details for a document including metadata keys and relationships."""
+    results = _get_graph().query(queries.GET_DOCUMENT, {"s3_key": s3_key})
+    if not results:
+        raise HTTPException(404, f"Document '{s3_key}' not found")
+    return results[0]
+
+
+@router.patch("/documents/{s3_key:path}/description")
+async def update_document_description(s3_key: str, req: DescriptionUpdate):
+    """Update a document's description."""
+    graph = _get_graph()
+    results = graph.query("MATCH (d:Document {s3_key: $key}) RETURN d", {"key": s3_key})
+    if not results:
+        raise HTTPException(404, f"Document '{s3_key}' not found")
+    graph.write(
+        "MATCH (d:Document {s3_key: $key}) SET d.description = $desc",
+        {"key": s3_key, "desc": req.description},
+    )
+    return {"ok": True}
+
+
 @router.get("/search", response_model=list[SearchResult])
 async def search_catalog(
     q: str = Query(..., description="Search query"),

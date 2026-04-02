@@ -188,6 +188,29 @@ RETURN 'document' AS type, node.s3_key AS id, node.name AS name,
 ORDER BY score DESC LIMIT $limit
 """
 
+LIST_DOCUMENTS = """
+MATCH (d:Document)
+OPTIONAL MATCH (d)-[:RELATES_TO]->(t:Table)
+OPTIONAL MATCH (d)-[:COVERS_CONCEPT]->(c:Concept)
+RETURN d.s3_key AS s3_key, d.name AS name, d.description AS description,
+       d.type AS type, d.vector_bucket AS vector_bucket, d.vector_index AS vector_index,
+       collect(DISTINCT t.full_name) AS related_tables,
+       collect(DISTINCT c.name) AS concepts
+ORDER BY d.name
+"""
+
+GET_DOCUMENT = """
+MATCH (d:Document {s3_key: $s3_key})
+OPTIONAL MATCH (d)-[:HAS_METADATA_KEY]->(mk:MetadataKey)
+OPTIONAL MATCH (d)-[:RELATES_TO]->(t:Table)
+OPTIONAL MATCH (d)-[:COVERS_CONCEPT]->(c:Concept)
+RETURN d.s3_key AS s3_key, d.name AS name, d.description AS description,
+       d.type AS type, d.vector_bucket AS vector_bucket, d.vector_index AS vector_index,
+       collect(DISTINCT {name: mk.name, data_type: mk.data_type, filterable: mk.filterable}) AS metadata_keys,
+       collect(DISTINCT t.full_name) AS related_tables,
+       collect(DISTINCT c.name) AS concepts
+"""
+
 GRAPH_SUMMARY = """
 MATCH (n)
 WITH labels(n)[0] AS label, count(*) AS cnt

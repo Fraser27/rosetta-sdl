@@ -88,6 +88,21 @@ export interface Metric {
   source?: string;
 }
 
+export interface DocumentSummary {
+  s3_key: string;
+  name: string;
+  description: string;
+  type: string;
+  vector_bucket: string;
+  vector_index: string;
+  related_tables: string[];
+  concepts: string[];
+}
+
+export interface DocumentDetail extends DocumentSummary {
+  metadata_keys: { name: string; data_type: string; filterable: boolean }[];
+}
+
 export interface GraphSummary {
   nodes: Record<string, number>;
   edges: Record<string, number>;
@@ -114,6 +129,12 @@ export const api = {
     }),
   updateColumnDescription: (tableName: string, columnName: string, description: string) =>
     request<{ ok: boolean }>(`/catalog/tables/${tableName}/columns/${columnName}/description`, {
+      method: 'PATCH', body: JSON.stringify({ description }),
+    }),
+  listDocuments: () => request<DocumentSummary[]>('/catalog/documents'),
+  getDocument: (key: string) => request<DocumentDetail>(`/catalog/documents/${key}`),
+  updateDocumentDescription: (key: string, description: string) =>
+    request<{ ok: boolean }>(`/catalog/documents/${key}/description`, {
       method: 'PATCH', body: JSON.stringify({ description }),
     }),
   search: (q: string) => request<SearchResult[]>(`/catalog/search?q=${encodeURIComponent(q)}`),
