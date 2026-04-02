@@ -89,6 +89,7 @@ class MetricSummary(BaseModel):
     base_metrics: list[str] | None = Field(default_factory=list)
     synonyms: list[str] | None = Field(default_factory=list)
     grain: list[str] | None = Field(default_factory=list)
+    source: str = "user"  # user | sample | yaml
 
 
 class SearchResult(BaseModel):

@@ -80,7 +80,7 @@ SET m1.name = "total_revenue", m1.definition = "Total dollar value of all comple
     m1.filters = ["status != 'cancelled'"], m1.grain = ["order_date"],
     m1.synonyms = ["total sales", "revenue", "gross revenue"],
     m1.synonyms_text = "total sales revenue gross revenue",
-    m1.source_table = "ecommerce.orders";
+    m1.source_table = "ecommerce.orders", m1.source = "sample";
 MATCH (m1:Metric {metric_id: "m_001"}), (t:Table {full_name: "ecommerce.orders"})
 MERGE (m1)-[:MEASURES]->(t);
 
@@ -90,7 +90,7 @@ SET m2.name = "average_order_value", m2.definition = "Average dollar value per c
     m2.filters = ["status != 'cancelled'"], m2.grain = ["order_date"],
     m2.synonyms = ["AOV", "avg order", "average order"],
     m2.synonyms_text = "AOV avg order average order",
-    m2.source_table = "ecommerce.orders";
+    m2.source_table = "ecommerce.orders", m2.source = "sample";
 MATCH (m2:Metric {metric_id: "m_002"}), (t:Table {full_name: "ecommerce.orders"})
 MERGE (m2)-[:MEASURES]->(t);
 
@@ -99,7 +99,7 @@ SET m3.name = "customer_count", m3.definition = "Count of distinct customers",
     m3.expression = "COUNT(DISTINCT customer_id)", m3.type = "simple",
     m3.synonyms = ["number of customers", "active customers"],
     m3.synonyms_text = "number of customers active customers",
-    m3.source_table = "ecommerce.customers";
+    m3.source_table = "ecommerce.customers", m3.source = "sample";
 MATCH (m3:Metric {metric_id: "m_003"}), (t:Table {full_name: "ecommerce.customers"})
 MERGE (m3)-[:MEASURES]->(t);
 
@@ -108,7 +108,7 @@ SET m4.name = "order_count", m4.definition = "Total number of orders",
     m4.expression = "COUNT(DISTINCT order_id)", m4.type = "simple",
     m4.synonyms = ["number of orders", "total orders"],
     m4.synonyms_text = "number of orders total orders",
-    m4.source_table = "ecommerce.orders";
+    m4.source_table = "ecommerce.orders", m4.source = "sample";
 MATCH (m4:Metric {metric_id: "m_004"}), (t:Table {full_name: "ecommerce.orders"})
 MERGE (m4)-[:MEASURES]->(t);
 

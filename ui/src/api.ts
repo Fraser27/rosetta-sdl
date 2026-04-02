@@ -85,6 +85,7 @@ export interface Metric {
   filters?: string[];
   time_grains?: string[];
   owner?: string;
+  source?: string;
 }
 
 export interface GraphSummary {

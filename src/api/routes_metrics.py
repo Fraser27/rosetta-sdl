@@ -48,6 +48,7 @@ class MetricCreateRequest(BaseModel):
     grain: list[str] = Field(default_factory=list)
     filters: list[str] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
+    source: str = "user"
 
 
 class MetricQueryRequest(BaseModel):
@@ -181,6 +182,7 @@ def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -
         "time_grains": req.time_grains,
         "joins_json": joins_json,
         "base_metrics": req.base_metrics,
+        "source": req.source,
     })
     # Manage DERIVES_FROM relationships for derived metrics
     graph.write(queries.CLEAR_DERIVED_LINKS, {"metric_id": metric_id})

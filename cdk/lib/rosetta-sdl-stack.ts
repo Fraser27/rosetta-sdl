@@ -8,6 +8,7 @@ import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as elbv2_targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -358,6 +359,57 @@ function handler(event) {
       destinationBucket: uiBucket,
       distribution,
       distributionPaths: ['/*'],
+    });
+
+    // ─────────────────────────────────────────────
+    // Auto-deploy FastAPI on every `cdk deploy`
+    //
+    // Sends an SSM Run Command to the EC2 instance
+    // to git pull + rebuild Docker containers.
+    // The deployHash changes every deploy, forcing re-execution.
+    // ─────────────────────────────────────────────
+    const deployHash = Date.now().toString();
+
+    new cr.AwsCustomResource(this, 'DeployFastApi', {
+      onCreate: {
+        service: 'SSM',
+        action: 'sendCommand',
+        parameters: {
+          InstanceIds: [instance.instanceId],
+          DocumentName: 'AWS-RunShellScript',
+          Parameters: {
+            commands: [
+              'cd /opt/semantic-layer && git pull && /usr/local/bin/docker-compose up -d --build',
+            ],
+          },
+          Comment: `CDK deploy ${deployHash}`,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(`deploy-${deployHash}`),
+      },
+      onUpdate: {
+        service: 'SSM',
+        action: 'sendCommand',
+        parameters: {
+          InstanceIds: [instance.instanceId],
+          DocumentName: 'AWS-RunShellScript',
+          Parameters: {
+            commands: [
+              'cd /opt/semantic-layer && git pull && /usr/local/bin/docker-compose up -d --build',
+            ],
+          },
+          Comment: `CDK deploy ${deployHash}`,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(`deploy-${deployHash}`),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['ssm:SendCommand'],
+          resources: [
+            `arn:aws:ec2:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:instance/${instance.instanceId}`,
+            `arn:aws:ssm:${cdk.Aws.REGION}::document/AWS-RunShellScript`,
+          ],
+        }),
+      ]),
     });
 
     // ─────────────────────────────────────────────

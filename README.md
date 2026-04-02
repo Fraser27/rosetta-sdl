@@ -494,6 +494,7 @@ RETURN node.name, node.definition, score
 | `PUT` | `/metrics/{id}` | Update a metric |
 | `DELETE` | `/metrics/{id}` | Delete a metric |
 | `POST` | `/metrics/{id}/query` | Execute metric with dimensions/filters |
+| `POST` | `/metrics/{id}/compile` | Compile metric to SQL without executing |
 
 ### Query
 
@@ -501,6 +502,7 @@ RETURN node.name, node.definition, score
 |--------|------|-------------|
 | `POST` | `/query/natural-language` | Full NL query pipeline (route → compile → firewall → execute) |
 | `POST` | `/query/plan` | Plan-only: returns SQL + vector search params without executing |
+| `POST` | `/query/compose` | Compose multiple metrics into a CTE query, optionally execute |
 | `POST` | `/query/sql` | Direct SQL execution with firewall validation |
 
 ### Admin
@@ -694,6 +696,7 @@ rosetta-sdl/
 │   │       ├── Tables.tsx       # Table browser + search
 │   │       ├── TableDetail.tsx  # Column/join details
 │   │       ├── Metrics.tsx      # CRUD for governed metrics
+│   │       ├── QueryBuilder.tsx # No-code multi-metric composer
 │   │       ├── GraphExplorer.tsx# Force-directed graph viz
 │   │       ├── Admin.tsx        # Scan/enrich/clear
 │   │       └── Login.tsx        # Cognito login
@@ -783,6 +786,48 @@ metrics_file: "metrics.yaml"
 - **No SSH Keys**: EC2 access via SSM Session Manager only.
 - **Encrypted EBS**: 30GB gp3 volume with encryption at rest.
 - **Network**: Security group restricts inbound to ports 8000, 7474, 22.
+
+---
+
+## Operations & Troubleshooting
+
+### EC2 Access via SSM
+
+```bash
+# Connect to the EC2 instance (no SSH keys needed)
+aws ssm start-session --target <instance-id>
+
+# Navigate to the project
+cd /opt/semantic-layer
+```
+
+### Docker Logs
+
+```bash
+# View recent logs (last 100 lines)
+docker logs semantic-layer-rosetta-1 --tail 100
+
+# Follow logs in real-time
+docker logs semantic-layer-rosetta-1 -f
+
+# View Neo4j logs
+docker logs semantic-layer-neo4j-1 --tail 100
+
+# List running containers
+docker ps
+
+# Restart services
+docker-compose restart
+```
+
+### Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 500 on `/api/metrics` | Pydantic validation error (null fields from Neo4j) | Check `source_table` COALESCE in `queries.py` |
+| 503 on any API | Graph client not initialized | Check Neo4j container is running |
+| 401 Unauthorized | Expired or missing JWT token | Re-login via Cognito hosted UI |
+| Metrics return empty | Graph not seeded | Run `POST /admin/scan` or seed demo data |
 
 ---
 

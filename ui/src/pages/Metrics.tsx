@@ -331,7 +331,15 @@ export default function Metrics() {
               <>
                 <tr key={m.metric_id}>
                   <td><span className="tag tag-blue">{m.metric_id}</span></td>
-                  <td><strong>{m.name}</strong><br /><span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{m.definition}</span></td>
+                  <td>
+                    <strong>{m.name}</strong>
+                    {m.source && m.source !== 'user' && (
+                      <span className="tag" style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-alt)', color: 'var(--text-dim)', border: '1px solid var(--border)' }}>
+                        {m.source}
+                      </span>
+                    )}
+                    <br /><span style={{ fontSize: 12, color: 'var(--text-dim)' }}>{m.definition}</span>
+                  </td>
                   <td><code style={{ fontSize: 12 }}>{m.expression}</code></td>
                   <td>
                     {m.type === 'derived' ? (

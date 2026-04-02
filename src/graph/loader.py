@@ -77,6 +77,9 @@ def load_metrics(graph: GraphClient, metrics: list[MetricDefinition]) -> int:
             "synonyms_text": " ".join(m.synonyms),
             "time_grains": m.time_grains,
             "source_table": m.source_table,
+            "joins_json": "[]",
+            "base_metrics": [],
+            "source": "yaml",
         })
 
         # Link business terms from synonyms
