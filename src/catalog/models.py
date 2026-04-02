@@ -97,6 +97,7 @@ class QueryRoute:
 class QueryResponse(BaseModel):
     route: str  # structured | unstructured | both
     intent: str = ""  # metric | analytical | schema | document
+    query_type: str = ""  # governed | ungoverned | document
     metric_name: str | None = None
     sql: str | None = None
     results: dict | None = None
@@ -108,6 +109,7 @@ class QueryPlan(BaseModel):
     """Query plan without execution — returns SQL/search params for external execution."""
     route: str  # structured | unstructured | both
     intent: str = ""  # metric | analytical | document
+    query_type: str = ""  # governed | ungoverned | document
     metric_name: str | None = None
     sql: str | None = None
     tables: list[str] = Field(default_factory=list)

@@ -71,6 +71,7 @@ async def natural_language_query(request: NLQueryRequest):
         try:
             sql_result = _handle_structured(request.question, route_result, graph)
             response.intent = sql_result.get("intent", "analytical")
+            response.query_type = sql_result.get("query_type", "ungoverned")
             response.metric_name = sql_result.get("metric_name")
             response.sql = sql_result.get("sql")
             response.results = sql_result.get("results")
@@ -85,6 +86,7 @@ async def natural_language_query(request: NLQueryRequest):
             response.vector_results = vector_results
             if not response.intent:
                 response.intent = "document"
+                response.query_type = "document"
         except Exception as e:
             logger.error("Vector search failed: %s", e)
             if not response.error:
@@ -121,6 +123,7 @@ def _handle_structured(question: str, route_result, graph: GraphClient) -> dict:
             )
             return {
                 "intent": "metric",
+                "query_type": "governed",
                 "metric_name": compiled.metric_name,
                 "sql": compiled.sql,
                 "results": result,
@@ -143,6 +146,7 @@ def _handle_structured(question: str, route_result, graph: GraphClient) -> dict:
     )
     return {
         "intent": "analytical",
+        "query_type": "ungoverned",
         "sql": sql,
         "results": result,
     }
@@ -201,6 +205,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
                         if not fw.allowed:
                             raise HTTPException(403, fw.reason)
                     plan.intent = "metric"
+                    plan.query_type = "governed"
                     plan.metric_name = compiled.metric_name
                     plan.sql = compiled.sql
 
@@ -212,6 +217,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
                     if not fw.allowed:
                         raise HTTPException(403, fw.reason)
                 plan.intent = "analytical"
+                plan.query_type = "ungoverned"
                 plan.sql = sql
 
         except HTTPException:
@@ -232,5 +238,6 @@ async def plan_query_endpoint(request: NLQueryRequest):
         ]
         if not plan.intent:
             plan.intent = "document"
+            plan.query_type = "document"
 
     return plan

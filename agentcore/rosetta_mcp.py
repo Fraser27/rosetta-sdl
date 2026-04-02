@@ -273,7 +273,10 @@ async def execute_query(question: str) -> str:
             return f"Access denied: {e.response.json().get('detail', '')}"
         raise
 
-    lines = [f"Route: {data.get('route', 'unknown')}", f"Intent: {data.get('intent', 'unknown')}"]
+    lines = [
+        f"Route: {data.get('route', 'unknown')}",
+        f"Query Type: {data.get('query_type', 'unknown')}",
+    ]
 
     if data.get("metric_name"):
         lines.append(f"Metric: {data['metric_name']}")
@@ -356,7 +359,7 @@ async def plan_query(question: str) -> str:
 
     lines = [
         f"Route: {data.get('route', 'unknown')}",
-        f"Intent: {data.get('intent', 'unknown')}",
+        f"Query Type: {data.get('query_type', 'unknown')}",
     ]
 
     if data.get("metric_name"):
