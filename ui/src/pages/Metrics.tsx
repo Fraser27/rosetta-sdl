@@ -297,6 +297,23 @@ export default function Metrics() {
     return m.source_table || '-'
   }
 
+  const [metricFilter, setMetricFilter] = useState('')
+
+  const filteredMetrics = useMemo(() => {
+    if (!metricFilter.trim()) return metrics
+    const q = metricFilter.toLowerCase()
+    return metrics.filter((m) =>
+      m.metric_id.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      (m.definition || '').toLowerCase().includes(q) ||
+      m.expression.toLowerCase().includes(q) ||
+      (m.source_table || '').toLowerCase().includes(q) ||
+      m.type.toLowerCase().includes(q) ||
+      (m.synonyms || []).some((s) => s.toLowerCase().includes(q)) ||
+      (m.source || '').toLowerCase().includes(q)
+    )
+  }, [metrics, metricFilter])
+
   const isDerived = form.type === 'derived'
   const filteredTables = form.source_db ? (tablesByDb[form.source_db] || []) : tables
 
@@ -309,8 +326,20 @@ export default function Metrics() {
         <p>Governed business metrics with deterministic SQL compilation</p>
       </div>
 
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 20, display: 'flex', gap: 12, alignItems: 'center' }}>
         <button className="btn btn-primary" onClick={openCreate}>+ New Metric</button>
+        <div className="search-bar" style={{ flex: 1, margin: 0 }}>
+          <input
+            placeholder="Filter metrics by name, ID, expression, source, synonyms..."
+            value={metricFilter}
+            onChange={(e) => setMetricFilter(e.target.value)}
+          />
+        </div>
+        {metricFilter && (
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+            {filteredMetrics.length} of {metrics.length}
+          </span>
+        )}
       </div>
 
       <div className="card">
@@ -327,7 +356,7 @@ export default function Metrics() {
             </tr>
           </thead>
           <tbody>
-            {metrics.map((m) => (
+            {filteredMetrics.map((m) => (
               <>
                 <tr key={m.metric_id}>
                   <td><span className="tag tag-blue">{m.metric_id}</span></td>
@@ -376,8 +405,8 @@ export default function Metrics() {
                 )}
               </>
             ))}
-            {metrics.length === 0 && (
-              <tr><td colSpan={7} className="empty-state">No metrics defined yet.</td></tr>
+            {filteredMetrics.length === 0 && (
+              <tr><td colSpan={7} className="empty-state">{metricFilter ? 'No metrics match your filter.' : 'No metrics defined yet.'}</td></tr>
             )}
           </tbody>
         </table>

@@ -14,6 +14,7 @@ export default function Admin() {
   const [datasources, setDatasources] = useState<{ name: string; table_count: number }[]>([])
   const [selectedDs, setSelectedDs] = useState<Set<string>>(new Set())
   const [forceEnrich, setForceEnrich] = useState(false)
+  const [dsPickerOpen, setDsPickerOpen] = useState(false)
   const [modelId, setModelId] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
   const [enrichJob, setEnrichJob] = useState<EnrichmentJob | null>(null)
@@ -284,36 +285,54 @@ export default function Admin() {
             Requires Bedrock model access. Ensure the EC2 IAM role has <code>bedrock:InvokeModel</code> permission.
           </p>
 
-          {/* Datasource picker */}
+          {/* Datasource picker — collapsible */}
           {datasources.length > 0 && (
             <div style={{ margin: '12px 0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Select DataSources</label>
-                <button className="btn btn-ghost btn-sm" onClick={selectAllDs} style={{ fontSize: 11 }}>
-                  {selectedDs.size === datasources.length ? 'Deselect All' : 'Select All'}
-                </button>
+              <div
+                onClick={() => setDsPickerOpen((v) => !v)}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '8px 12px', background: 'var(--bg-alt)', borderRadius: 6,
+                  cursor: 'pointer', border: '1px solid var(--border)',
+                }}
+              >
+                <span style={{ fontSize: 12 }}>
+                  {selectedDs.size === 0
+                    ? <span style={{ color: 'var(--text-dim)' }}>All datasources ({datasources.length})</span>
+                    : <><strong>{selectedDs.size}</strong> of {datasources.length} datasources selected</>}
+                </span>
+                <span style={{ fontSize: 10, color: 'var(--text-dim)' }}>{dsPickerOpen ? '▲' : '▼'}</span>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {datasources.map((ds) => (
-                  <label
-                    key={ds.name}
-                    className={`base-metric-option ${selectedDs.has(ds.name) ? 'selected' : ''}`}
-                    style={{ padding: '4px 10px', fontSize: 12 }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedDs.has(ds.name)}
-                      onChange={() => toggleDs(ds.name)}
-                    />
-                    {ds.name}
-                    <span style={{ color: 'var(--text-dim)', marginLeft: 4 }}>({ds.table_count} tables)</span>
-                  </label>
-                ))}
-              </div>
-              {selectedDs.size === 0 && (
-                <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
-                  No datasources selected — will enrich all.
-                </p>
+              {dsPickerOpen && (
+                <div style={{
+                  border: '1px solid var(--border)', borderTop: 'none', borderRadius: '0 0 6px 6px',
+                  maxHeight: 160, overflowY: 'auto', padding: '6px 8px',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={selectAllDs} style={{ fontSize: 11 }}>
+                      {selectedDs.size === datasources.length ? 'Deselect All' : 'Select All'}
+                    </button>
+                  </div>
+                  {datasources.map((ds) => (
+                    <label
+                      key={ds.name}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 6,
+                        padding: '3px 4px', fontSize: 12, cursor: 'pointer',
+                        borderRadius: 4,
+                        background: selectedDs.has(ds.name) ? 'var(--accent-bg, rgba(99,102,241,0.08))' : 'transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedDs.has(ds.name)}
+                        onChange={() => toggleDs(ds.name)}
+                      />
+                      {ds.name}
+                      <span style={{ color: 'var(--text-dim)', marginLeft: 'auto' }}>{ds.table_count} tables</span>
+                    </label>
+                  ))}
+                </div>
               )}
             </div>
           )}

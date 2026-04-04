@@ -166,13 +166,14 @@ async def load_sample_data():
         raise HTTPException(404, "sample/seed_graph.cypher not found")
 
     cypher_text = cypher_path.read_text()
-    statements = [s.strip() for s in cypher_text.split(";") if s.strip() and not s.strip().startswith("//")]
-    for stmt in statements:
-        # Skip pure comment lines
-        lines = [l for l in stmt.splitlines() if not l.strip().startswith("//")]
+    # Split by semicolons, strip comment lines from each block, execute non-empty ones
+    executed = 0
+    for raw_stmt in cypher_text.split(";"):
+        lines = [l for l in raw_stmt.splitlines() if not l.strip().startswith("//")]
         clean = "\n".join(lines).strip()
         if clean:
             graph.write(clean)
+            executed += 1
 
     # 2. Load sample metrics YAML
     metrics, joins = load_metrics_yaml("sample/metrics.yaml")
@@ -188,7 +189,7 @@ async def load_sample_data():
              "on_column": jp.on_column, "join_type": jp.join_type},
         )
 
-    return {"status": "ok", "message": f"Loaded sample data: {len(statements)} cypher statements, {len(metrics)} metrics, {len(joins)} joins"}
+    return {"status": "ok", "message": f"Loaded sample data: {executed} cypher statements, {len(metrics)} metrics, {len(joins)} joins"}
 
 
 @router.delete("/sample-data")
