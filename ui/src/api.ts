@@ -164,12 +164,31 @@ export const api = {
 
   // Admin
   scan: () => request<Record<string, unknown>>('/admin/scan', { method: 'POST' }),
-  enrich: (force = false) => request<Record<string, unknown>>(`/admin/enrich${force ? '?force=true' : ''}`, { method: 'POST' }),
+  enrich: (datasources: string[] = [], force = false, model_id = '') =>
+    request<{ status: string; job_id: string }>('/admin/enrich', {
+      method: 'POST',
+      body: JSON.stringify({ datasources, force, model_id }),
+    }),
+  enrichStatus: (jobId: string) => request<EnrichmentJob>(`/admin/enrich/${jobId}`),
+  listDatasources: () => request<{ name: string; table_count: number }[]>('/admin/datasources'),
+  getConfig: () => request<Record<string, string>>('/admin/config'),
   clear: () => request<Record<string, unknown>>('/admin/clear', { method: 'POST' }),
 
   // Graph data for visualization
   graphData: () => request<{ nodes: GraphNode[]; edges: GraphEdge[] }>('/catalog/graph/data'),
 };
+
+export interface EnrichmentJob {
+  job_id: string;
+  status: string;
+  datasources: string[];
+  force: boolean;
+  tables: { total: number; enriched: number; skipped: number; failed: number };
+  documents: { total: number; enriched: number };
+  current_table: string;
+  elapsed_seconds?: number;
+  error?: string;
+}
 
 export interface GraphNode {
   id: string;

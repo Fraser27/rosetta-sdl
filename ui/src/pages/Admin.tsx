@@ -1,10 +1,31 @@
-import { useState } from 'react'
-import { api } from '../api'
+import { useEffect, useState, useRef } from 'react'
+import { api, type EnrichmentJob } from '../api'
 
 export default function Admin() {
   const [results, setResults] = useState<Record<string, unknown> | null>(null)
   const [loading, setLoading] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
+
+  // Enrichment state
+  const [datasources, setDatasources] = useState<{ name: string; table_count: number }[]>([])
+  const [selectedDs, setSelectedDs] = useState<Set<string>>(new Set())
+  const [forceEnrich, setForceEnrich] = useState(false)
+  const [modelId, setModelId] = useState('')
+  const [defaultModel, setDefaultModel] = useState('')
+  const [enrichJob, setEnrichJob] = useState<EnrichmentJob | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  useEffect(() => {
+    api.listDatasources().then(setDatasources).catch(() => {})
+    api.getConfig().then((cfg) => {
+      if (cfg.enrichment_model) setDefaultModel(cfg.enrichment_model as string)
+    }).catch(() => {})
+  }, [])
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -19,12 +40,134 @@ export default function Admin() {
       const res = await fn()
       setResults(res)
       showToast(`${name} completed successfully`)
+      // Refresh datasources after scan
+      if (name === 'scan') api.listDatasources().then(setDatasources).catch(() => {})
     } catch (e: unknown) {
       showToast((e as Error).message, 'error')
     } finally {
       setLoading(null)
     }
   }
+
+  const startEnrichment = async () => {
+    setLoading('enrich')
+    setResults(null)
+    setEnrichJob(null)
+    try {
+      const dsFilter = selectedDs.size > 0 ? Array.from(selectedDs) : []
+      const res = await api.enrich(dsFilter, forceEnrich, modelId)
+      showToast('Enrichment started')
+
+      // Start polling
+      const jobId = res.job_id
+      const poll = async () => {
+        try {
+          const status = await api.enrichStatus(jobId)
+          setEnrichJob(status)
+          if (status.status === 'completed' || status.status === 'failed') {
+            if (pollRef.current) clearInterval(pollRef.current)
+            pollRef.current = null
+            setLoading(null)
+            if (status.status === 'completed') {
+              showToast(`Enrichment complete: ${status.tables.enriched} tables enriched`)
+            } else {
+              showToast(`Enrichment failed: ${status.error || 'unknown error'}`, 'error')
+            }
+          }
+        } catch {
+          // Polling error — keep trying
+        }
+      }
+      // Poll immediately, then every 2 seconds
+      poll()
+      pollRef.current = setInterval(poll, 2000)
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+      setLoading(null)
+    }
+  }
+
+  const toggleDs = (name: string) => {
+    setSelectedDs((prev) => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  }
+
+  const selectAllDs = () => {
+    if (selectedDs.size === datasources.length) {
+      setSelectedDs(new Set())
+    } else {
+      setSelectedDs(new Set(datasources.map((d) => d.name)))
+    }
+  }
+
+  const enrichProgress = enrichJob ? (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3>Enrichment Progress</h3>
+        <span className={`tag ${enrichJob.status === 'completed' ? 'tag-green' : enrichJob.status === 'failed' ? 'tag-red' : 'tag-blue'}`}>
+          {enrichJob.status}
+        </span>
+      </div>
+      <div style={{ padding: '12px 16px' }}>
+        {/* Progress bar */}
+        {enrichJob.tables.total > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+              <span>Tables: {enrichJob.tables.enriched} enriched, {enrichJob.tables.skipped} skipped, {enrichJob.tables.failed} failed</span>
+              <span>{enrichJob.tables.enriched + enrichJob.tables.skipped + enrichJob.tables.failed} / {enrichJob.tables.total}</span>
+            </div>
+            <div style={{ height: 6, background: 'var(--bg-alt)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${((enrichJob.tables.enriched + enrichJob.tables.skipped + enrichJob.tables.failed) / enrichJob.tables.total) * 100}%`,
+                background: enrichJob.tables.failed > 0 ? 'var(--orange)' : 'var(--green)',
+                borderRadius: 3,
+                transition: 'width 0.3s',
+              }} />
+            </div>
+          </div>
+        )}
+
+        {enrichJob.documents.total > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+              <span>Documents: {enrichJob.documents.enriched} enriched</span>
+              <span>{enrichJob.documents.enriched} / {enrichJob.documents.total}</span>
+            </div>
+            <div style={{ height: 6, background: 'var(--bg-alt)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${(enrichJob.documents.enriched / enrichJob.documents.total) * 100}%`,
+                background: 'var(--accent)',
+                borderRadius: 3,
+                transition: 'width 0.3s',
+              }} />
+            </div>
+          </div>
+        )}
+
+        {enrichJob.current_table && (
+          <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            Currently enriching: <code>{enrichJob.current_table}</code>
+          </p>
+        )}
+
+        {enrichJob.elapsed_seconds !== undefined && (
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 4 }}>
+            Elapsed: {enrichJob.elapsed_seconds}s
+          </p>
+        )}
+
+        {enrichJob.error && (
+          <p style={{ fontSize: 12, color: 'var(--red)', marginTop: 8 }}>{enrichJob.error}</p>
+        )}
+      </div>
+    </div>
+  ) : null
 
   return (
     <>
@@ -48,24 +191,78 @@ export default function Admin() {
 
         <div className="admin-card">
           <h3>Enrich Metadata</h3>
-          <p>Use LLM (Bedrock) to generate descriptions for tables and columns, extract concepts from documents, and create business term mappings.</p>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <p>Use LLM (Bedrock) to generate descriptions for tables and columns, extract concepts from documents, and create business term mappings. Tables and columns with existing descriptions are skipped.</p>
+          <p style={{ fontSize: 11, color: 'var(--orange)', margin: '8px 0' }}>
+            Requires Bedrock model access. Ensure the EC2 IAM role has <code>bedrock:InvokeModel</code> permission.
+          </p>
+
+          {/* Datasource picker */}
+          {datasources.length > 0 && (
+            <div style={{ margin: '12px 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Select DataSources</label>
+                <button className="btn btn-ghost btn-sm" onClick={selectAllDs} style={{ fontSize: 11 }}>
+                  {selectedDs.size === datasources.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {datasources.map((ds) => (
+                  <label
+                    key={ds.name}
+                    className={`base-metric-option ${selectedDs.has(ds.name) ? 'selected' : ''}`}
+                    style={{ padding: '4px 10px', fontSize: 12 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedDs.has(ds.name)}
+                      onChange={() => toggleDs(ds.name)}
+                    />
+                    {ds.name}
+                    <span style={{ color: 'var(--text-dim)', marginLeft: 4 }}>({ds.table_count} tables)</span>
+                  </label>
+                ))}
+              </div>
+              {selectedDs.size === 0 && (
+                <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 4 }}>
+                  No datasources selected — will enrich all.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Model ID */}
+          <div style={{ margin: '12px 0' }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', display: 'block', marginBottom: 4 }}>Bedrock Model ID</label>
+            <input
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              placeholder={defaultModel || 'e.g. anthropic.claude-haiku-4-5-20251001'}
+              style={{ width: '100%', maxWidth: 400, fontSize: 13 }}
+            />
+            <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 2 }}>
+              Leave blank to use default: <code>{defaultModel || 'loading...'}</code>
+            </p>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
             <button
               className="btn btn-primary"
-              onClick={() => runAction('enrich', () => api.enrich())}
+              onClick={startEnrichment}
               disabled={loading !== null}
             >
-              {loading === 'enrich' ? 'Enriching...' : 'Enrich New'}
+              {loading === 'enrich' ? 'Enriching...' : 'Start Enrichment'}
             </button>
-            <button
-              className="btn btn-ghost"
-              onClick={() => runAction('enrich', () => api.enrich(true))}
-              disabled={loading !== null}
-              title="Re-enrich all tables and documents, even those with existing descriptions"
-            >
-              {loading === 'enrich' ? 'Enriching...' : 'Force Re-enrich All'}
-            </button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-dim)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={forceEnrich}
+                onChange={(e) => setForceEnrich(e.target.checked)}
+              />
+              Force re-enrich (overwrite existing descriptions)
+            </label>
           </div>
+
+          {enrichProgress}
         </div>
 
         <div className="admin-card">

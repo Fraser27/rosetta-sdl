@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'react'
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { api, type GraphNode, type GraphEdge } from '../api'
 
 const NODE_COLORS: Record<string, string> = {
@@ -29,6 +29,14 @@ export default function GraphExplorer() {
   const [hovered, setHovered] = useState<SimNode | null>(null)
   const dragRef = useRef<SimNode | null>(null)
   const animRef = useRef<number>(0)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Pan & zoom state
+  const [zoom, setZoom] = useState(1)
+  const [panX, setPanX] = useState(0)
+  const [panY, setPanY] = useState(0)
+  const isPanning = useRef(false)
+  const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
 
   // Filters
   const [selectedDatasource, setSelectedDatasource] = useState<string>('__all__')
@@ -52,52 +60,114 @@ export default function GraphExplorer() {
       .finally(() => setLoading(false))
   }, [])
 
-  // Build datasource membership from graph edges (more reliable than Cypher properties)
+  // Fullscreen toggle
+  const toggleFullscreen = useCallback(() => {
+    setIsFullscreen((f) => !f)
+  }, [])
+
+  // Escape key exits fullscreen
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false)
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [isFullscreen])
+
+  // Convert screen coords to world coords
+  const screenToWorld = useCallback((sx: number, sy: number) => {
+    return {
+      x: (sx - panX) / zoom,
+      y: (sy - panY) / zoom,
+    }
+  }, [panX, panY, zoom])
+
+  // Zoom functions
+  const handleZoomIn = () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2
+    const newZoom = Math.min(zoom * 1.3, 5)
+    setPanX(cx - (cx - panX) * (newZoom / zoom))
+    setPanY(cy - (cy - panY) * (newZoom / zoom))
+    setZoom(newZoom)
+  }
+
+  const handleZoomOut = () => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const cx = canvas.clientWidth / 2, cy = canvas.clientHeight / 2
+    const newZoom = Math.max(zoom / 1.3, 0.1)
+    setPanX(cx - (cx - panX) * (newZoom / zoom))
+    setPanY(cy - (cy - panY) * (newZoom / zoom))
+    setZoom(newZoom)
+  }
+
+  const handleFitToScreen = () => {
+    if (nodes.length === 0) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const cw = canvas.clientWidth, ch = canvas.clientHeight
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const n of nodes) {
+      if (n.x < minX) minX = n.x
+      if (n.x > maxX) maxX = n.x
+      if (n.y < minY) minY = n.y
+      if (n.y > maxY) maxY = n.y
+    }
+    const graphW = maxX - minX || 100, graphH = maxY - minY || 100
+    const pad = 80
+    const newZoom = Math.min((cw - pad * 2) / graphW, (ch - pad * 2) / graphH, 3)
+    const centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2
+    setZoom(newZoom)
+    setPanX(cw / 2 - centerX * newZoom)
+    setPanY(ch / 2 - centerY * newZoom)
+  }
+
+  const handleResetZoom = () => {
+    setZoom(1)
+    setPanX(0)
+    setPanY(0)
+  }
+
+  // Wheel zoom
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault()
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top
+    const factor = e.deltaY < 0 ? 1.1 : 0.9
+    const newZoom = Math.min(Math.max(zoom * factor, 0.1), 5)
+    setPanX(mx - (mx - panX) * (newZoom / zoom))
+    setPanY(my - (my - panY) * (newZoom / zoom))
+    setZoom(newZoom)
+  }, [zoom, panX, panY])
+
+  // Build datasource membership from graph edges
   const nodeToDatasource = useMemo(() => {
     const map = new Map<string, string>()
-
-    // DataSource nodes own themselves
     for (const n of allNodes) {
       if (n.type === 'DataSource') map.set(n.id, n.label)
     }
-
-    // CONTAINS: DataSource -> Table
     for (const e of allEdges) {
-      if (e.type === 'CONTAINS' && map.has(e.source)) {
-        map.set(e.target, map.get(e.source)!)
-      }
+      if (e.type === 'CONTAINS' && map.has(e.source)) map.set(e.target, map.get(e.source)!)
     }
-
-    // HAS_COLUMN: Table -> Column (inherit datasource from parent table)
     for (const e of allEdges) {
-      if (e.type === 'HAS_COLUMN' && map.has(e.source)) {
-        map.set(e.target, map.get(e.source)!)
-      }
+      if (e.type === 'HAS_COLUMN' && map.has(e.source)) map.set(e.target, map.get(e.source)!)
     }
-
-    // MEASURES: Metric -> Table (inherit datasource from measured table)
     for (const e of allEdges) {
-      if (e.type === 'MEASURES' && map.has(e.target)) {
-        map.set(e.source, map.get(e.target)!)
-      }
+      if (e.type === 'MEASURES' && map.has(e.target)) map.set(e.source, map.get(e.target)!)
     }
-
-    // HAS_METADATA_KEY: Document -> MetadataKey
     for (const e of allEdges) {
-      if (e.type === 'HAS_METADATA_KEY' && map.has(e.source)) {
-        map.set(e.target, map.get(e.source)!)
-      }
+      if (e.type === 'HAS_METADATA_KEY' && map.has(e.source)) map.set(e.target, map.get(e.source)!)
     }
-
     return map
   }, [allNodes, allEdges])
 
-  // Extract unique datasources
   const datasources = useMemo(() => {
     return Array.from(new Set(nodeToDatasource.values())).sort()
   }, [nodeToDatasource])
 
-  // Extract tables for the selected datasource
   const tables = useMemo(() => {
     return allNodes
       .filter((n) => {
@@ -109,70 +179,38 @@ export default function GraphExplorer() {
       .sort()
   }, [allNodes, selectedDatasource, nodeToDatasource])
 
-  // Reset table filter when datasource changes
-  useEffect(() => {
-    setSelectedTable('__all__')
-  }, [selectedDatasource])
+  useEffect(() => { setSelectedTable('__all__') }, [selectedDatasource])
 
-  // Extract node types present in the data
   const nodeTypes = useMemo(() => {
     const types = new Set<string>()
     for (const n of allNodes) types.add(n.type)
     return Array.from(types).sort()
   }, [allNodes])
 
-  // Filtered nodes and edges
   const { nodes, edges } = useMemo(() => {
-    // When a specific table is selected, show it + all directly connected nodes
     if (selectedTable !== '__all__') {
-      const tableNode = allNodes.find(
-        (n) => n.type === 'Table' && n.label === selectedTable
-      )
+      const tableNode = allNodes.find((n) => n.type === 'Table' && n.label === selectedTable)
       if (!tableNode) return { nodes: [], edges: [] }
-
-      // Find all nodes connected to this table (1-hop neighborhood)
       const connectedIds = new Set<string>([tableNode.id])
       const tableEdges: GraphEdge[] = []
       for (const e of allEdges) {
-        if (e.source === tableNode.id) {
-          connectedIds.add(e.target)
-          tableEdges.push(e)
-        }
-        if (e.target === tableNode.id) {
-          connectedIds.add(e.source)
-          tableEdges.push(e)
-        }
+        if (e.source === tableNode.id) { connectedIds.add(e.target); tableEdges.push(e) }
+        if (e.target === tableNode.id) { connectedIds.add(e.source); tableEdges.push(e) }
       }
-
-      // Also include edges between the connected nodes (e.g. JOINS_TO targets' columns)
-      // Keep it to 1-hop for clarity
-
-      const filteredNodes = allNodes.filter(
-        (n) => connectedIds.has(n.id) && visibleTypes.has(n.type)
-      )
+      const filteredNodes = allNodes.filter((n) => connectedIds.has(n.id) && visibleTypes.has(n.type))
       const visibleIds = new Set(filteredNodes.map((n) => n.id))
-      const filteredEdges = tableEdges.filter(
-        (e) => visibleIds.has(e.source) && visibleIds.has(e.target)
-      )
-
+      const filteredEdges = tableEdges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
       return { nodes: filteredNodes, edges: filteredEdges }
     }
-
-    // Datasource + type filter
     const filteredNodes = allNodes.filter((n) => {
       if (!visibleTypes.has(n.type)) return false
       if (selectedDatasource === '__all__') return true
       const ds = nodeToDatasource.get(n.id)
       if (ds) return ds === selectedDatasource
-      // Nodes without a datasource (e.g. BusinessTerm, Concept): show always
       return true
     })
-
     const visibleIds = new Set(filteredNodes.map((n) => n.id))
-    const filteredEdges = allEdges.filter(
-      (e) => visibleIds.has(e.source) && visibleIds.has(e.target)
-    )
-
+    const filteredEdges = allEdges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target))
     return { nodes: filteredNodes, edges: filteredEdges }
   }, [allNodes, allEdges, selectedDatasource, selectedTable, visibleTypes, nodeToDatasource])
 
@@ -213,8 +251,8 @@ export default function GraphExplorer() {
       if (alpha < 0.001) alpha = 0.001
 
       const canvas = canvasRef.current
-      const cw = canvas?.clientWidth || 800
-      const ch = canvas?.clientHeight || 500
+      const cw = (canvas?.clientWidth || 800) / zoom
+      const ch = (canvas?.clientHeight || 500) / zoom
       const pad = 30
 
       for (const n of nodes) {
@@ -268,10 +306,6 @@ export default function GraphExplorer() {
         if (n === dragRef.current) continue
         n.vx *= 0.9; n.vy *= 0.9
         n.x += n.vx; n.y += n.vy
-        if (n.x < pad) { n.x = pad; n.vx *= -0.5; }
-        if (n.x > cw - pad) { n.x = cw - pad; n.vx *= -0.5; }
-        if (n.y < pad) { n.y = pad; n.vy *= -0.5; }
-        if (n.y > ch - pad) { n.y = ch - pad; n.vy *= -0.5; }
       }
 
       draw()
@@ -295,6 +329,9 @@ export default function GraphExplorer() {
     }
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.save()
+    ctx.translate(panX, panY)
+    ctx.scale(zoom, zoom)
 
     const style = getComputedStyle(document.documentElement)
     const labelColor = style.getPropertyValue('--text').trim() || '#1a1d2e'
@@ -304,7 +341,7 @@ export default function GraphExplorer() {
     const nodeMap = new Map(nodes.map((n) => [n.id, n]))
 
     ctx.strokeStyle = edgeColor
-    ctx.lineWidth = 1
+    ctx.lineWidth = 1 / zoom
     for (const e of edges) {
       const a = nodeMap.get(e.source), b = nodeMap.get(e.target)
       if (!a || !b) continue
@@ -333,7 +370,7 @@ export default function GraphExplorer() {
 
       if (n === hovered) {
         ctx.strokeStyle = labelColor
-        ctx.lineWidth = 2
+        ctx.lineWidth = 2 / zoom
         ctx.stroke()
       }
 
@@ -343,6 +380,7 @@ export default function GraphExplorer() {
       ctx.fillText(n.label, n.x, n.y + radius + 14)
     }
 
+    // Tooltip (drawn in world coords)
     if (hovered) {
       const x = hovered.x + 16, y = hovered.y - 10
       const lines = [`${hovered.type}: ${hovered.label}`]
@@ -357,7 +395,7 @@ export default function GraphExplorer() {
       ctx.roundRect(x, y - 14, w, h, 4)
       ctx.fill()
       ctx.strokeStyle = edgeColor
-      ctx.lineWidth = 1
+      ctx.lineWidth = 1 / zoom
       ctx.stroke()
       ctx.fillStyle = labelColor
       ctx.textAlign = 'left'
@@ -365,9 +403,15 @@ export default function GraphExplorer() {
         ctx.fillText(lines[i], x + 10, y + 3 + i * 18)
       }
     }
+
+    ctx.restore()
   }
 
-  const getNodeAt = (mx: number, my: number): SimNode | null => {
+  // Redraw when pan/zoom changes
+  useEffect(() => { draw() }, [panX, panY, zoom])
+
+  const getNodeAt = (sx: number, sy: number): SimNode | null => {
+    const { x: mx, y: my } = screenToWorld(sx, sy)
     for (const n of [...nodes].reverse()) {
       const r = n.type === 'Column' ? 5 : 12
       const dx = mx - n.x, dy = my - n.y
@@ -379,40 +423,53 @@ export default function GraphExplorer() {
   const handleMouseDown = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
-    const node = getNodeAt(e.clientX - rect.left, e.clientY - rect.top)
-    if (node) dragRef.current = node
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top
+    const node = getNodeAt(sx, sy)
+    if (node) {
+      dragRef.current = node
+    } else {
+      // Start panning
+      isPanning.current = true
+      panStart.current = { x: e.clientX, y: e.clientY, panX, panY }
+    }
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
-    const mx = e.clientX - rect.left, my = e.clientY - rect.top
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top
+
+    if (isPanning.current) {
+      setPanX(panStart.current.panX + (e.clientX - panStart.current.x))
+      setPanY(panStart.current.panY + (e.clientY - panStart.current.y))
+      return
+    }
 
     if (dragRef.current) {
-      dragRef.current.x = mx
-      dragRef.current.y = my
+      const { x, y } = screenToWorld(sx, sy)
+      dragRef.current.x = x
+      dragRef.current.y = y
       dragRef.current.vx = 0
       dragRef.current.vy = 0
     } else {
-      setHovered(getNodeAt(mx, my))
+      setHovered(getNodeAt(sx, sy))
     }
   }
 
-  const handleMouseUp = () => { dragRef.current = null }
+  const handleMouseUp = () => {
+    dragRef.current = null
+    isPanning.current = false
+  }
 
   const toggleType = (type: string) => {
     setVisibleTypes((prev) => {
       const next = new Set(prev)
-      if (next.has(type)) {
-        next.delete(type)
-      } else {
-        next.add(type)
-      }
+      if (next.has(type)) next.delete(type)
+      else next.add(type)
       return next
     })
   }
 
-  // Build filter description for stats
   const filterDesc = useMemo(() => {
     const parts: string[] = []
     if (selectedDatasource !== '__all__') parts.push(selectedDatasource)
@@ -424,89 +481,92 @@ export default function GraphExplorer() {
   if (error) return <div className="empty-state">Error loading graph: {error}</div>
 
   return (
-    <>
-      <div className="page-header">
-        <h2>Graph Explorer</h2>
-        <p>Interactive visualization of the semantic layer ontology</p>
-      </div>
+    <div className={`graph-page ${isFullscreen ? 'graph-fullscreen' : ''}`}>
+      {/* Toolbar */}
+      <div className="graph-toolbar">
+        <div className="graph-toolbar-left">
+          <div className="graph-filter-group">
+            <label className="graph-filter-label">DataSource</label>
+            <select
+              className="graph-filter-select"
+              value={selectedDatasource}
+              onChange={(e) => setSelectedDatasource(e.target.value)}
+            >
+              <option value="__all__">All DataSources</option>
+              {datasources.map((ds) => (
+                <option key={ds} value={ds}>{ds}</option>
+              ))}
+            </select>
+          </div>
 
-      <div className="graph-filters">
-        <div className="graph-filter-group">
-          <label className="graph-filter-label">DataSource</label>
-          <select
-            className="graph-filter-select"
-            value={selectedDatasource}
-            onChange={(e) => setSelectedDatasource(e.target.value)}
-          >
-            <option value="__all__">All DataSources</option>
-            {datasources.map((ds) => (
-              <option key={ds} value={ds}>{ds}</option>
-            ))}
-          </select>
-        </div>
+          <div className="graph-filter-group">
+            <label className="graph-filter-label">Table</label>
+            <select
+              className="graph-filter-select"
+              value={selectedTable}
+              onChange={(e) => setSelectedTable(e.target.value)}
+            >
+              <option value="__all__">All Tables</option>
+              {tables.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </div>
 
-        <div className="graph-filter-group">
-          <label className="graph-filter-label">Table</label>
-          <select
-            className="graph-filter-select"
-            value={selectedTable}
-            onChange={(e) => setSelectedTable(e.target.value)}
-          >
-            <option value="__all__">All Tables</option>
-            {tables.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="graph-filter-group">
-          <label className="graph-filter-label">Node Types</label>
-          <div className="graph-type-toggles">
-            {nodeTypes.map((type) => (
-              <button
-                key={type}
-                className={`graph-type-toggle ${visibleTypes.has(type) ? 'active' : ''}`}
-                style={{
-                  '--toggle-color': NODE_COLORS[type] || '#6c8cff',
-                } as React.CSSProperties}
-                onClick={() => toggleType(type)}
-              >
-                <span
-                  className="graph-legend-dot"
-                  style={{
-                    background: visibleTypes.has(type)
-                      ? (NODE_COLORS[type] || '#6c8cff')
-                      : 'var(--border)',
-                  }}
-                />
-                {type}
-              </button>
-            ))}
+          <div className="graph-filter-group">
+            <label className="graph-filter-label">Node Types</label>
+            <div className="graph-type-toggles">
+              {nodeTypes.map((type) => (
+                <button
+                  key={type}
+                  className={`graph-type-toggle ${visibleTypes.has(type) ? 'active' : ''}`}
+                  style={{ '--toggle-color': NODE_COLORS[type] || '#6c8cff' } as React.CSSProperties}
+                  onClick={() => toggleType(type)}
+                >
+                  <span
+                    className="graph-legend-dot"
+                    style={{ background: visibleTypes.has(type) ? (NODE_COLORS[type] || '#6c8cff') : 'var(--border)' }}
+                  />
+                  {type}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+
+        <div className="graph-toolbar-right">
+          <span className="graph-stats">
+            {nodes.length} nodes, {edges.length} edges{filterDesc}
+          </span>
+        </div>
       </div>
 
-      <div className="graph-container" ref={containerRef}>
+      {/* Canvas */}
+      <div className="graph-container graph-container-fill" ref={containerRef}>
         <canvas
           ref={canvasRef}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          style={{ cursor: dragRef.current ? 'grabbing' : hovered ? 'grab' : 'default' }}
+          onWheel={handleWheel}
+          style={{ cursor: isPanning.current ? 'grabbing' : dragRef.current ? 'grabbing' : hovered ? 'grab' : 'default' }}
         />
-      </div>
 
-      <div className="card" style={{ marginTop: 20 }}>
-        <div className="card-header">
-          <h3>Graph Stats</h3>
+        {/* Zoom controls */}
+        <div className="graph-zoom-controls">
+          <button onClick={handleZoomIn} title="Zoom in">+</button>
+          <button onClick={handleZoomOut} title="Zoom out">&minus;</button>
+          <button onClick={handleFitToScreen} title="Fit to screen">&#x2922;</button>
+          <button onClick={handleResetZoom} title="Reset zoom">1:1</button>
+          <button onClick={toggleFullscreen} title={isFullscreen ? 'Exit fullscreen (Esc)' : 'Fullscreen'}>
+            {isFullscreen ? '\u2716' : '\u26F6'}
+          </button>
         </div>
-        <p style={{ fontSize: 14, color: 'var(--text-dim)' }}>
-          Showing {nodes.length} nodes, {edges.length} edges{filterDesc}.
-          {allNodes.length !== nodes.length && ` Total: ${allNodes.length} nodes, ${allEdges.length} edges.`}
-          {' '}Drag nodes to rearrange.
-        </p>
+
+        {/* Zoom indicator */}
+        <div className="graph-zoom-indicator">{Math.round(zoom * 100)}%</div>
       </div>
-    </>
+    </div>
   )
 }

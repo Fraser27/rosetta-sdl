@@ -118,7 +118,7 @@ git clone https://github.com/Fraser27/rosetta-sdl.git
 cd rosetta-sdl
 
 # Start Neo4j + FastAPI
-docker-compose up -d
+docker-compose up -d --build
 ```
 
 Wait ~30 seconds for Neo4j to become healthy, then verify:
@@ -200,7 +200,7 @@ export ATHENA_WORKGROUP=my-workgroup
 export ATHENA_OUTPUT_BUCKET=s3://my-bucket/athena-results/
 
 # Restart to pick up config
-docker-compose up -d
+docker-compose up -d --build
 
 # Auto-discover tables, columns, and documents
 curl -s -X POST http://localhost:8000/admin/scan | python3 -m json.tool
@@ -621,7 +621,7 @@ python -m pytest tests/unit -v
 ### Smoke test (requires running services)
 
 ```bash
-docker-compose up -d
+docker-compose up -d --build
 cat sample/seed_graph.cypher | docker exec -i $(docker ps -q -f name=neo4j) cypher-shell -u neo4j -p semantic-layer
 
 # Run smoke tests
