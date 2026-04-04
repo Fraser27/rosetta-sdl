@@ -26,12 +26,6 @@ logger = logging.getLogger("semantic-layer.auth")
 
 COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
 COGNITO_REGION = os.environ.get("COGNITO_REGION", "us-east-1")
-INTERNAL_API_KEY_SECRET_NAME = os.environ.get("INTERNAL_API_KEY_SECRET", "rosetta-sdl/internal-api-key")
-
-# Lazy-loaded internal API key (from env var or Secrets Manager)
-_internal_api_key: str | None = None
-_internal_api_key_loaded: bool = False
-_internal_api_key_fetched_at: float = 0
 
 # Paths that skip auth
 PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
@@ -39,48 +33,6 @@ PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
 # JWKS cache
 _jwks: dict[str, Any] | None = None
 _jwks_fetched_at: float = 0
-
-
-def _get_internal_api_key() -> str:
-    """Get the internal API key — checks env var first, then Secrets Manager.
-
-    Caches successful loads for 5 minutes. Failed loads are retried every 60 seconds
-    to avoid permanently caching an empty key if Secrets Manager is temporarily unavailable.
-    """
-    global _internal_api_key, _internal_api_key_loaded, _internal_api_key_fetched_at
-    now = time.time()
-
-    # Return cached value if we have a successful load within TTL
-    if _internal_api_key_loaded and _internal_api_key:
-        if (now - _internal_api_key_fetched_at) < 300:  # 5 min TTL for success
-            return _internal_api_key
-    # Retry failed loads every 60s instead of caching empty permanently
-    elif _internal_api_key_loaded and not _internal_api_key:
-        if (now - _internal_api_key_fetched_at) < 60:
-            return ""
-
-    _internal_api_key_loaded = True
-    _internal_api_key_fetched_at = now
-
-    # 1. Check env var (fastest, works for local dev / docker-compose)
-    env_key = os.environ.get("INTERNAL_API_KEY", "")
-    if env_key:
-        _internal_api_key = env_key
-        logger.info("Internal API key loaded from INTERNAL_API_KEY env var")
-        return _internal_api_key
-
-    # 2. Try Secrets Manager (for EC2 deployment)
-    try:
-        import boto3
-        sm = boto3.client("secretsmanager", region_name=COGNITO_REGION)
-        resp = sm.get_secret_value(SecretId=INTERNAL_API_KEY_SECRET_NAME)
-        _internal_api_key = resp["SecretString"]
-        logger.info("Internal API key loaded from Secrets Manager: %s", INTERNAL_API_KEY_SECRET_NAME)
-        return _internal_api_key
-    except Exception as e:
-        logger.debug("No internal API key available (Secrets Manager: %s): %s", INTERNAL_API_KEY_SECRET_NAME, e)
-        _internal_api_key = ""
-        return ""
 
 
 def _get_jwks_url() -> str:
@@ -151,15 +103,6 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         # Skip public paths
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
-
-        # Allow internal service-to-service calls via API key
-        internal_key = _get_internal_api_key()
-        if internal_key:
-            api_key = request.headers.get("X-API-Key", "")
-            if api_key == internal_key:
-                request.state.user = {"sub": "internal-service"}
-                request.state.user_email = "internal-service"
-                return await call_next(request)
 
         # Extract token from Authorization header
         auth_header = request.headers.get("Authorization", "")

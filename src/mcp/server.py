@@ -26,10 +26,8 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
 
-_headers = {"X-API-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
-_client = httpx.Client(base_url=API_URL, timeout=60.0, headers=_headers)
+_client = httpx.Client(base_url=API_URL, timeout=60.0)
 
 
 def _get(path: str, params: dict | None = None) -> dict:
@@ -163,6 +161,9 @@ def list_metrics() -> str:
             lines.append(f"    Composes: {', '.join(m['base_metrics'])}")
         else:
             lines.append(f"    Source: {m.get('source_table', 'N/A')}")
+        if m.get("parameters"):
+            param_strs = [f"{p['column']} ({p.get('operator', '=')}{', required' if p.get('required') else ''})" for p in m["parameters"]]
+            lines.append(f"    Parameters: {', '.join(param_strs)}")
         if m.get("synonyms"):
             lines.append(f"    Also known as: {', '.join(m['synonyms'])}")
     return "\n".join(lines)
@@ -201,6 +202,12 @@ def get_metric_definition(metric_id: str) -> str:
         lines.append(f"Filters: {m['filters']}")
     if m.get("grain"):
         lines.append(f"Grain: {', '.join(m['grain'])}")
+    if m.get("parameters"):
+        lines.append("Parameters:")
+        for p in m["parameters"]:
+            req = " (required)" if p.get("required") else ""
+            desc = f" — {p['description']}" if p.get("description") else ""
+            lines.append(f"  - {p['column']} {p.get('operator', '=')}{req}{desc}")
     if m.get("synonyms"):
         lines.append(f"Synonyms: {', '.join(m['synonyms'])}")
     return "\n".join(lines)
@@ -215,10 +222,13 @@ def query_metric(
 ) -> str:
     """Execute a governed metric with optional dimensions and filters.
 
+    If the metric declares parameters, only those columns are accepted as filters.
+    Required parameters must be provided or the query will fail.
+
     Args:
         metric_id: Metric ID
         dimensions: Comma-separated dimension columns (e.g., "order_date,category")
-        filters: Comma-separated filters (e.g., "status=completed,year=2025")
+        filters: Comma-separated filters matching declared parameters (e.g., "user_id=user_a,status=completed")
         limit: Max rows (default 100)
     """
     body: dict = {"limit": limit}
