@@ -754,7 +754,8 @@ metrics_file: "metrics.yaml"
 | `VECTOR_BUCKETS` | Comma-separated S3 Vector bucket names | |
 | `ATHENA_WORKGROUP` | Athena workgroup name | `primary` |
 | `ATHENA_OUTPUT_BUCKET` | S3 path for Athena query results | |
-| `METRICS_FILE` | Path to metrics YAML file | `metrics.yaml` |
+| `METRICS_FILE` | Path to metrics YAML file | _(none)_ |
+| `LOAD_SAMPLE_DATA` | Set `true` to load sample metrics from `sample/metrics.yaml` | `false` |
 | `BEDROCK_QUERY_MODEL` | Bedrock model for NL→SQL | `global.anthropic.claude-sonnet-4-5-20250929-v1:0` |
 | `BEDROCK_ENRICHMENT_MODEL` | Bedrock model for metadata enrichment | `global.anthropic.claude-haiku-4-5-20251001-v1:0` |
 | `COGNITO_USER_POOL_ID` | Cognito pool ID (empty = auth disabled) | |

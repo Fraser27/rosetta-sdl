@@ -48,7 +48,7 @@ class SemanticLayerConfig:
     vector_buckets: list[VectorBucketConfig] = field(default_factory=list)
     athena: AthenaConfig = field(default_factory=AthenaConfig)
     bedrock: BedrockConfig = field(default_factory=BedrockConfig)
-    metrics_file: str = "metrics.yaml"
+    metrics_file: str = ""
     allowed_tables: list[str] = field(default_factory=list)
     max_query_rows: int = 500
 
@@ -100,6 +100,8 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
         cfg.athena.output_bucket = v
     if v := os.environ.get("METRICS_FILE"):
         cfg.metrics_file = v
+    if os.environ.get("LOAD_SAMPLE_DATA", "").lower() in ("true", "1", "yes"):
+        cfg.metrics_file = "sample/metrics.yaml"
     if v := os.environ.get("BEDROCK_QUERY_MODEL"):
         cfg.bedrock.query_model = v
     if v := os.environ.get("BEDROCK_ENRICHMENT_MODEL"):

@@ -140,6 +140,90 @@ async def clear_graph():
     return {"status": "ok", "message": "Graph cleared"}
 
 
+@router.get("/sample-data/status")
+async def sample_data_status():
+    """Check if sample data is loaded in the graph."""
+    graph = _get_graph()
+    result = graph.query(
+        "OPTIONAL MATCH (ds:DataSource {name: 'ecommerce'}) "
+        "OPTIONAL MATCH (m:Metric) WHERE m.source = 'sample' "
+        "RETURN count(DISTINCT ds) AS datasources, count(DISTINCT m) AS metrics"
+    )
+    row = result[0] if result else {"datasources": 0, "metrics": 0}
+    loaded = (row.get("datasources", 0) or 0) > 0 or (row.get("metrics", 0) or 0) > 0
+    return {"loaded": loaded, "datasources": row.get("datasources", 0) or 0, "metrics": row.get("metrics", 0) or 0}
+
+
+@router.post("/sample-data/load")
+async def load_sample_data():
+    """Load sample ecommerce data (seed cypher + metrics YAML) into the graph."""
+    graph = _get_graph()
+    from pathlib import Path
+
+    # 1. Execute seed_graph.cypher
+    cypher_path = Path("sample/seed_graph.cypher")
+    if not cypher_path.exists():
+        raise HTTPException(404, "sample/seed_graph.cypher not found")
+
+    cypher_text = cypher_path.read_text()
+    statements = [s.strip() for s in cypher_text.split(";") if s.strip() and not s.strip().startswith("//")]
+    for stmt in statements:
+        # Skip pure comment lines
+        lines = [l for l in stmt.splitlines() if not l.strip().startswith("//")]
+        clean = "\n".join(lines).strip()
+        if clean:
+            graph.write(clean)
+
+    # 2. Load sample metrics YAML
+    metrics, joins = load_metrics_yaml("sample/metrics.yaml")
+    if metrics:
+        load_metrics(graph, metrics)
+
+    # 3. Load join paths from YAML (seed cypher already creates joins, but be safe)
+    for jp in joins:
+        graph.write(
+            "MATCH (t1:Table {full_name: $source_table}), (t2:Table {full_name: $target_table}) "
+            "MERGE (t1)-[:JOINS_TO {on_column: $on_column, join_type: $join_type}]->(t2)",
+            {"source_table": jp.source_table, "target_table": jp.target_table,
+             "on_column": jp.on_column, "join_type": jp.join_type},
+        )
+
+    return {"status": "ok", "message": f"Loaded sample data: {len(statements)} cypher statements, {len(metrics)} metrics, {len(joins)} joins"}
+
+
+@router.delete("/sample-data")
+async def delete_sample_data():
+    """Delete all sample/ecommerce data from the graph."""
+    graph = _get_graph()
+
+    # Delete sample metrics and their relationships
+    graph.write("MATCH (m:Metric) WHERE m.source = 'sample' DETACH DELETE m")
+
+    # Delete business terms that were linked only to sample metrics (orphaned)
+    graph.write(
+        "MATCH (bt:BusinessTerm) "
+        "WHERE NOT exists((bt)-[:MAPS_TO]->(:Metric)) AND NOT exists((bt)-[:MAPS_TO]->(:Column)) "
+        "DETACH DELETE bt"
+    )
+
+    # Delete ecommerce datasource and all its tables/columns
+    graph.write(
+        "MATCH (ds:DataSource {name: 'ecommerce'})-[:CONTAINS]->(t:Table) "
+        "OPTIONAL MATCH (t)-[:HAS_COLUMN]->(c:Column) "
+        "DETACH DELETE c"
+    )
+    graph.write(
+        "MATCH (ds:DataSource {name: 'ecommerce'})-[:CONTAINS]->(t:Table) "
+        "DETACH DELETE t"
+    )
+    graph.write("MATCH (ds:DataSource {name: 'ecommerce'}) DETACH DELETE ds")
+
+    # Delete YAML-sourced metrics too (from metrics.yaml)
+    graph.write("MATCH (m:Metric) WHERE m.source = 'yaml' AND m.source_table STARTS WITH 'ecommerce.' DETACH DELETE m")
+
+    return {"status": "ok", "message": "Sample data deleted"}
+
+
 @router.get("/config")
 async def get_config():
     """Return current configuration (sanitized)."""

@@ -172,6 +172,9 @@ export const api = {
   enrichStatus: (jobId: string) => request<EnrichmentJob>(`/admin/enrich/${jobId}`),
   listDatasources: () => request<{ name: string; table_count: number }[]>('/admin/datasources'),
   getConfig: () => request<Record<string, string>>('/admin/config'),
+  sampleDataStatus: () => request<{ loaded: boolean; datasources: number; metrics: number }>('/admin/sample-data/status'),
+  loadSampleData: () => request<Record<string, unknown>>('/admin/sample-data/load', { method: 'POST' }),
+  deleteSampleData: () => request<Record<string, unknown>>('/admin/sample-data', { method: 'DELETE' }),
   clear: () => request<Record<string, unknown>>('/admin/clear', { method: 'POST' }),
 
   // Graph data for visualization

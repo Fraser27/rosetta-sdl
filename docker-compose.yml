@@ -28,7 +28,7 @@ services:
       VECTOR_BUCKETS: ""
       ATHENA_WORKGROUP: semantic-layer-wg
       ATHENA_OUTPUT_BUCKET: ""
-      METRICS_FILE: /app/sample/metrics.yaml
+      # METRICS_FILE: /app/sample/metrics.yaml  # uncomment to load sample metrics
       BEDROCK_QUERY_MODEL: global.anthropic.claude-sonnet-4-5-20250929-v1:0
       BEDROCK_ENRICHMENT_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0
     depends_on:

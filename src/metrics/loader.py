@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 def load_metrics(metrics_file: str) -> tuple[list[MetricDefinition], list[JoinPath]]:
     """Load metrics and join paths from a YAML file."""
+    if not metrics_file:
+        logger.info("No metrics file configured — skipping YAML metric loading")
+        return [], []
     path = Path(metrics_file)
     if not path.exists():
         logger.warning("Metrics file not found: %s", metrics_file)

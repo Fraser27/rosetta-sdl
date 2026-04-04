@@ -6,6 +6,10 @@ export default function Admin() {
   const [loading, setLoading] = useState<string | null>(null)
   const [toast, setToast] = useState<{ msg: string; type: string } | null>(null)
 
+  // Sample data state
+  const [sampleLoaded, setSampleLoaded] = useState<boolean | null>(null)
+  const [sampleInfo, setSampleInfo] = useState<{ datasources: number; metrics: number } | null>(null)
+
   // Enrichment state
   const [datasources, setDatasources] = useState<{ name: string; table_count: number }[]>([])
   const [selectedDs, setSelectedDs] = useState<Set<string>>(new Set())
@@ -15,11 +19,19 @@ export default function Admin() {
   const [enrichJob, setEnrichJob] = useState<EnrichmentJob | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const checkSampleStatus = () => {
+    api.sampleDataStatus().then((s) => {
+      setSampleLoaded(s.loaded)
+      setSampleInfo({ datasources: s.datasources, metrics: s.metrics })
+    }).catch(() => {})
+  }
+
   useEffect(() => {
     api.listDatasources().then(setDatasources).catch(() => {})
     api.getConfig().then((cfg) => {
       if (cfg.enrichment_model) setDefaultModel(cfg.enrichment_model as string)
     }).catch(() => {})
+    checkSampleStatus()
   }, [])
 
   // Cleanup polling on unmount
@@ -177,6 +189,82 @@ export default function Admin() {
       </div>
 
       <div className="admin-actions">
+        <div className="admin-card">
+          <h3>Sample Data</h3>
+          <p>Load or remove the built-in ecommerce demo dataset (4 tables, 4 metrics, join paths, business terms).</p>
+
+          {sampleLoaded === null ? (
+            <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>Checking status...</p>
+          ) : sampleLoaded ? (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--green)', margin: '8px 0' }}>
+                Sample data is loaded ({sampleInfo?.metrics || 0} sample metrics)
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  className="btn btn-danger"
+                  onClick={async () => {
+                    if (!confirm('Delete all sample/ecommerce data from the graph?')) return
+                    setLoading('sample-delete')
+                    try {
+                      const res = await api.deleteSampleData()
+                      setResults(res)
+                      showToast('Sample data deleted')
+                      checkSampleStatus()
+                      api.listDatasources().then(setDatasources).catch(() => {})
+                    } catch (e: unknown) { showToast((e as Error).message, 'error') }
+                    finally { setLoading(null) }
+                  }}
+                  disabled={loading !== null}
+                >
+                  {loading === 'sample-delete' ? 'Deleting...' : 'Delete Sample Data'}
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={async () => {
+                    setLoading('sample-reload')
+                    try {
+                      await api.deleteSampleData()
+                      const res = await api.loadSampleData()
+                      setResults(res)
+                      showToast('Sample data reloaded')
+                      checkSampleStatus()
+                      api.listDatasources().then(setDatasources).catch(() => {})
+                    } catch (e: unknown) { showToast((e as Error).message, 'error') }
+                    finally { setLoading(null) }
+                  }}
+                  disabled={loading !== null}
+                >
+                  {loading === 'sample-reload' ? 'Reloading...' : 'Reload'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '8px 0' }}>
+                No sample data loaded
+              </p>
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  setLoading('sample-load')
+                  try {
+                    const res = await api.loadSampleData()
+                    setResults(res)
+                    showToast('Sample data loaded')
+                    checkSampleStatus()
+                    api.listDatasources().then(setDatasources).catch(() => {})
+                  } catch (e: unknown) { showToast((e as Error).message, 'error') }
+                  finally { setLoading(null) }
+                }}
+                disabled={loading !== null}
+              >
+                {loading === 'sample-load' ? 'Loading...' : 'Load Sample Data'}
+              </button>
+            </>
+          )}
+        </div>
+
         <div className="admin-card">
           <h3>Scan Data Sources</h3>
           <p>Scan configured Glue databases and S3 Vector buckets. Populates the graph with tables, columns, documents, metrics, and join paths.</p>
