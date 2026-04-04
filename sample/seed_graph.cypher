@@ -86,7 +86,7 @@ MERGE (m1)-[:MEASURES]->(t);
 
 MERGE (m2:Metric {metric_id: "m_002"})
 SET m2.name = "average_order_value", m2.definition = "Average dollar value per completed order",
-    m2.expression = "SUM(total_amount) / COUNT(DISTINCT order_id)", m2.type = "derived",
+    m2.expression = "SUM(total_amount) / COUNT(DISTINCT order_id)", m2.type = "simple",
     m2.filters = ["status != 'cancelled'"], m2.grain = ["order_date"],
     m2.synonyms = ["AOV", "avg order", "average order"],
     m2.synonyms_text = "AOV avg order average order",

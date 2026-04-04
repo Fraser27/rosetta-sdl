@@ -17,7 +17,7 @@ metrics:
     name: average_order_value
     synonyms: ["AOV", "avg order", "average order"]
     definition: "Average dollar value per completed order"
-    type: derived
+    type: simple
     expression: "SUM(total_amount) / COUNT(DISTINCT order_id)"
     source_table: "ecommerce.orders"
     filters: ["status != 'cancelled'"]
@@ -65,7 +65,7 @@ metrics:
     name: revenue_per_customer
     synonyms: ["customer value", "ARPC", "average revenue per customer"]
     definition: "Average revenue generated per customer"
-    type: derived
+    type: simple
     expression: "SUM(total_amount) / COUNT(DISTINCT customer_id)"
     source_table: "ecommerce.orders"
     filters: ["status != 'cancelled'"]
