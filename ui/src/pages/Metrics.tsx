@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type Metric, type MetricJoin, type MetricParameter, type TableSummary, type Column } from '../api'
+import { api, type Metric, type MetricJoin, type TableSummary, type Column } from '../api'
 
 interface JoinRow {
   table: string

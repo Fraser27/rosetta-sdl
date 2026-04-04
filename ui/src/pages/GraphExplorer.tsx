@@ -271,7 +271,6 @@ export default function GraphExplorer() {
 
     // Position visible nodes in a circular layout centered on canvas
     const visibleArr = nodesRef.current.filter((n) => visibleNodeIds.has(n.id))
-    const angleStep = (2 * Math.PI) / Math.max(visibleArr.length, 1)
     const baseRadius = Math.min(cw, ch) * 0.3
 
     // Layout: put "important" nodes (Table, Metric, DataSource) in inner ring, others outer
