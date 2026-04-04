@@ -13,7 +13,7 @@ vector_buckets: []
   #   bucket: "my-vector-bucket"
 
 athena:
-  workgroup: "semantic-layer-wg"
+  workgroup: "primary"
   output_bucket: "s3://my-bucket/athena-results/"
 
 metrics_file: "sample/metrics.yaml"

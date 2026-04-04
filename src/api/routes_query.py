@@ -43,6 +43,7 @@ def _get_graph() -> GraphClient:
 class NLQueryRequest(BaseModel):
     question: str
     max_rows: int = Field(default=100, ge=1, le=1000)
+    workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
 
 class SQLQueryRequest(BaseModel):
@@ -50,6 +51,7 @@ class SQLQueryRequest(BaseModel):
     database: str | None = None
     catalog: str | None = None
     max_rows: int = Field(default=100, ge=1, le=1000)
+    workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
 
 @router.post("/natural-language", response_model=QueryResponse)
@@ -66,10 +68,12 @@ async def natural_language_query(request: NLQueryRequest):
     route_result = route_query(request.question, graph)
     response = QueryResponse(route=route_result.route)
 
+    workgroup = request.workgroup or _config.athena.workgroup
+
     # 2. Handle structured path
     if route_result.route in ("structured", "both"):
         try:
-            sql_result = _handle_structured(request.question, route_result, graph)
+            sql_result = _handle_structured(request.question, route_result, graph, workgroup=workgroup)
             response.intent = sql_result.get("intent", "analytical")
             response.query_type = sql_result.get("query_type", "ungoverned")
             response.metric_name = sql_result.get("metric_name")
@@ -95,8 +99,9 @@ async def natural_language_query(request: NLQueryRequest):
     return response
 
 
-def _handle_structured(question: str, route_result, graph: GraphClient) -> dict:
+def _handle_structured(question: str, route_result, graph: GraphClient, workgroup: str | None = None) -> dict:
     """Handle the structured query path."""
+    wg = workgroup or _config.athena.workgroup
     # Disambiguate
     disambiguation = disambiguate(question, graph)
 
@@ -117,7 +122,7 @@ def _handle_structured(question: str, route_result, graph: GraphClient) -> dict:
 
             result = execute_query(
                 sql=compiled.sql,
-                workgroup=_config.athena.workgroup,
+                workgroup=wg,
                 output_location=_config.athena.output_bucket,
                 max_rows=_config.max_query_rows,
             )
@@ -140,7 +145,7 @@ def _handle_structured(question: str, route_result, graph: GraphClient) -> dict:
 
     result = execute_query(
         sql=sql,
-        workgroup=_config.athena.workgroup,
+        workgroup=wg,
         output_location=_config.athena.output_bucket,
         max_rows=_config.max_query_rows,
     )
@@ -163,7 +168,7 @@ async def direct_sql_query(request: SQLQueryRequest):
 
     result = execute_query(
         sql=request.sql,
-        workgroup=_config.athena.workgroup,
+        workgroup=request.workgroup or _config.athena.workgroup,
         output_location=_config.athena.output_bucket,
         database=request.database,
         catalog=request.catalog,
@@ -249,6 +254,7 @@ class ComposeRequest(BaseModel):
     order_by: list[str] = Field(default_factory=list)
     limit: int | None = None
     execute: bool = False
+    workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
 
 @router.post("/compose")
@@ -291,7 +297,7 @@ async def compose_metrics_endpoint(request: ComposeRequest):
     if request.execute:
         result = execute_query(
             sql=compiled.sql,
-            workgroup=_config.athena.workgroup,
+            workgroup=request.workgroup or _config.athena.workgroup,
             output_location=_config.athena.output_bucket,
             max_rows=request.limit or _config.max_query_rows,
         )

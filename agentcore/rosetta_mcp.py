@@ -1,17 +1,21 @@
 """
 Rosetta SDL MCP Server for AgentCore Runtime
 
-Exposes 8 tools that proxy to the Rosetta SDL FastAPI service on EC2.
+Exposes 10 tools that proxy to the Rosetta SDL FastAPI service on EC2.
 Runs as a stateless HTTP server inside AgentCore Runtime.
 
 Configuration (environment variables):
-  API_URL  — Base URL of the Rosetta SDL FastAPI on EC2 (e.g., http://54.x.x.x:8000)
+  API_URL               — Base URL of the Rosetta SDL FastAPI on EC2
+  COGNITO_TOKEN_URL     — Cognito token endpoint for client_credentials grant
+  OUTBOUND_CLIENT_ID    — Cognito M2M client ID for outbound auth
+  OUTBOUND_CLIENT_SECRET — Cognito M2M client secret
+  OUTBOUND_SCOPE        — OAuth2 scope to request (e.g., "rosetta-sdl-runtime/invoke")
 """
 
-import json
 import logging
 import os
-from typing import Optional
+import time
+import threading
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -20,11 +24,49 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000").rstrip("/")
-INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+COGNITO_TOKEN_URL = os.environ.get("COGNITO_TOKEN_URL", "")
+OUTBOUND_CLIENT_ID = os.environ.get("OUTBOUND_CLIENT_ID", "")
+OUTBOUND_CLIENT_SECRET = os.environ.get("OUTBOUND_CLIENT_SECRET", "")
+OUTBOUND_SCOPE = os.environ.get("OUTBOUND_SCOPE", "")
+
 logger.info(f"Rosetta SDL MCP Server starting — API_URL: {API_URL}")
 
-_headers = {"X-API-Key": INTERNAL_API_KEY} if INTERNAL_API_KEY else {}
-_client = httpx.Client(base_url=API_URL, timeout=60.0, headers=_headers)
+# Token cache
+_token_lock = threading.Lock()
+_cached_token: str = ""
+_token_expires_at: float = 0
+
+
+def _get_access_token() -> str:
+    """Fetch a Cognito access token via client_credentials grant. Caches until expiry."""
+    global _cached_token, _token_expires_at
+
+    if not COGNITO_TOKEN_URL or not OUTBOUND_CLIENT_ID:
+        return ""
+
+    now = time.time()
+    if _cached_token and now < _token_expires_at - 60:  # refresh 60s before expiry
+        return _cached_token
+
+    with _token_lock:
+        # Double-check after acquiring lock
+        if _cached_token and time.time() < _token_expires_at - 60:
+            return _cached_token
+
+        logger.info("Fetching new outbound access token from Cognito...")
+        data = {"grant_type": "client_credentials", "client_id": OUTBOUND_CLIENT_ID, "client_secret": OUTBOUND_CLIENT_SECRET}
+        if OUTBOUND_SCOPE:
+            data["scope"] = OUTBOUND_SCOPE
+
+        resp = httpx.post(COGNITO_TOKEN_URL, data=data, timeout=10.0)
+        resp.raise_for_status()
+        token_data = resp.json()
+
+        _cached_token = token_data["access_token"]
+        _token_expires_at = time.time() + token_data.get("expires_in", 3600)
+        logger.info("Outbound access token refreshed (expires in %ds)", token_data.get("expires_in", 3600))
+        return _cached_token
+
 
 mcp = FastMCP(
     name="rosetta-sdl",
@@ -45,14 +87,21 @@ mcp = FastMCP(
 )
 
 
+def _headers() -> dict:
+    token = _get_access_token()
+    if token:
+        return {"Authorization": f"Bearer {token}"}
+    return {}
+
+
 def _get(path: str, params: dict | None = None) -> dict:
-    resp = _client.get(path, params=params)
+    resp = httpx.get(f"{API_URL}{path}", params=params, headers=_headers(), timeout=60.0)
     resp.raise_for_status()
     return resp.json()
 
 
 def _post(path: str, body: dict | None = None) -> dict:
-    resp = _client.post(path, json=body)
+    resp = httpx.post(f"{API_URL}{path}", json=body, headers=_headers(), timeout=60.0)
     resp.raise_for_status()
     return resp.json()
 

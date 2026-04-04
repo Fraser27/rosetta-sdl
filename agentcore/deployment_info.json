@@ -1,0 +1,26 @@
+{
+  "gateway": {
+    "gateway_id": "rosetta-sdl-gateway-ptl57geflh",
+    "gateway_url": "https://rosetta-sdl-gateway-ptl57geflh.gateway.bedrock-agentcore.us-east-1.amazonaws.com/mcp"
+  },
+  "gateway_role_arn": "arn:aws:iam::444206144756:role/agentcore-rosetta-sdl-gw-role",
+  "runtime_role_arn": "arn:aws:iam::444206144756:role/agentcore-runtime-rosetta-sdl-runtime-role",
+  "auth": {
+    "token_url": "https://semantic-layer-444206144756.auth.us-east-1.amazoncognito.com/oauth2/token",
+    "client_id": "1eq6vorsb9tjolfdadvth7k39s",
+    "client_secret": "315lgq1mv443l051kb4fb54i82997cfhcdk82g008inqkj41f3q",
+    "discovery_url": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VoTbc9ILe/.well-known/openid-configuration",
+    "scope": "rosetta-sdl-gateway/invoke",
+    "cognito_pool_id": "us-east-1_VoTbc9ILe"
+  },
+  "agent": {
+    "agent_arn": "arn:aws:bedrock-agentcore:us-east-1:444206144756:runtime/rosetta_sdl_mcp-xiQqDwA4MM",
+    "agent_id": "rosetta_sdl_mcp-xiQqDwA4MM",
+    "agent_url": "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A444206144756%3Aruntime%2Frosetta_sdl_mcp-xiQqDwA4MM/invocations?qualifier=DEFAULT"
+  },
+  "credential_providers": {
+    "gateway_to_runtime": "arn:aws:bedrock-agentcore:us-east-1:444206144756:token-vault/default/oauth2credentialprovider/rosetta-sdl-identity"
+  },
+  "target_id": "PFSNRXT1TW",
+  "fastapi_url": "http://Rosett-Alb16-4VeaepQ2jsXw-1108823079.us-east-1.elb.amazonaws.com"
+}

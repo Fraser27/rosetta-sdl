@@ -1,0 +1,66 @@
+default_agent: rosetta_sdl_mcp
+agents:
+  rosetta_sdl_mcp:
+    name: rosetta_sdl_mcp
+    language: python
+    node_version: null
+    entrypoint: /Users/fraseque/Fraser/Playground/aws-semantic-layer/agentcore/rosetta_mcp.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: null
+    aws:
+      execution_role: arn:aws:iam::444206144756:role/agentcore-runtime-rosetta-sdl-runtime-role
+      execution_role_auto_create: false
+      account: '444206144756'
+      region: us-east-1
+      ecr_repository: 444206144756.dkr.ecr.us-east-1.amazonaws.com/bedrock-agentcore-rosetta_sdl_mcp
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: MCP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: rosetta_sdl_mcp-xiQqDwA4MM
+      agent_arn: arn:aws:bedrock-agentcore:us-east-1:444206144756:runtime/rosetta_sdl_mcp-xiQqDwA4MM
+      agent_session_id: null
+    codebuild:
+      project_name: bedrock-agentcore-rosetta_sdl_mcp-builder
+      execution_role: arn:aws:iam::444206144756:role/AmazonBedrockAgentCoreSDKCodeBuild-us-east-1-183bf9f57c
+      source_bucket: bedrock-agentcore-codebuild-sources-444206144756-us-east-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration:
+      customJWTAuthorizer:
+        allowedClients:
+        - 3r84i4lgu5ai01j1dlc3pcuep0
+        discoveryUrl: https://cognito-idp.us-east-1.amazonaws.com/us-east-1_VoTbc9ILe/.well-known/openid-configuration
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false

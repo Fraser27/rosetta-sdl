@@ -31,6 +31,7 @@ INTERNAL_API_KEY_SECRET_NAME = os.environ.get("INTERNAL_API_KEY_SECRET", "rosett
 # Lazy-loaded internal API key (from env var or Secrets Manager)
 _internal_api_key: str | None = None
 _internal_api_key_loaded: bool = False
+_internal_api_key_fetched_at: float = 0
 
 # Paths that skip auth
 PUBLIC_PATHS = {"/health", "/", "/docs", "/openapi.json", "/redoc"}
@@ -41,11 +42,25 @@ _jwks_fetched_at: float = 0
 
 
 def _get_internal_api_key() -> str:
-    """Get the internal API key — checks env var first, then Secrets Manager."""
-    global _internal_api_key, _internal_api_key_loaded
-    if _internal_api_key_loaded:
-        return _internal_api_key or ""
+    """Get the internal API key — checks env var first, then Secrets Manager.
+
+    Caches successful loads for 5 minutes. Failed loads are retried every 60 seconds
+    to avoid permanently caching an empty key if Secrets Manager is temporarily unavailable.
+    """
+    global _internal_api_key, _internal_api_key_loaded, _internal_api_key_fetched_at
+    now = time.time()
+
+    # Return cached value if we have a successful load within TTL
+    if _internal_api_key_loaded and _internal_api_key:
+        if (now - _internal_api_key_fetched_at) < 300:  # 5 min TTL for success
+            return _internal_api_key
+    # Retry failed loads every 60s instead of caching empty permanently
+    elif _internal_api_key_loaded and not _internal_api_key:
+        if (now - _internal_api_key_fetched_at) < 60:
+            return ""
+
     _internal_api_key_loaded = True
+    _internal_api_key_fetched_at = now
 
     # 1. Check env var (fastest, works for local dev / docker-compose)
     env_key = os.environ.get("INTERNAL_API_KEY", "")

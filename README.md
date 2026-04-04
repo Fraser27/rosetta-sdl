@@ -821,6 +821,10 @@ docker ps
 docker-compose restart
 ```
 
+### Claude Code
+Add MCP to claude Code
+claude mcp add -t stdio rosetta-gw node /Users/fraseque/Fraser/Playground/aws-semantic-layer/agentcore/mcp-proxy.mjs
+
 ### Common Issues
 
 | Symptom | Cause | Fix |

@@ -56,6 +56,7 @@ class MetricQueryRequest(BaseModel):
     filters: list[dict] = Field(default_factory=list)
     order_by: list[str] = Field(default_factory=list)
     limit: int | None = None
+    workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
 
 def _parse_joins(raw: str | list | None) -> list[dict]:
@@ -123,7 +124,7 @@ async def query_metric(metric_id: str, request: MetricQueryRequest):
     # Execute via Athena
     result = execute_query(
         sql=compiled.sql,
-        workgroup=_config.athena.workgroup,
+        workgroup=request.workgroup or _config.athena.workgroup,
         output_location=_config.athena.output_bucket,
         max_rows=request.limit or _config.max_query_rows,
     )
