@@ -219,30 +219,6 @@ echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
       },
     });
 
-    // Write docker-compose override with real Cognito config and restart
-    instance.addUserData(`
-cd /opt/semantic-layer
-cat > docker-compose.override.yml << EOF
-services:
-  neo4j:
-    restart: always
-    environment:
-      NEO4J_server_memory_heap_initial__size: 512m
-      NEO4J_server_memory_heap_max__size: 1g
-
-  rosetta:
-    restart: always
-    environment:
-      COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
-      COGNITO_REGION: "${cdk.Aws.REGION}"
-      AWS_DEFAULT_REGION: "${cdk.Aws.REGION}"
-      ATHENA_WORKGROUP: "${athenaWorkgroup.name}"
-      ATHENA_OUTPUT_BUCKET: "s3://${athenaBucket.bucketName}/results/"
-EOF
-
-/usr/local/bin/docker-compose up -d
-`);
-
     // ─────────────────────────────────────────────
     // S3 Bucket — Athena query results
     // ─────────────────────────────────────────────
@@ -268,6 +244,30 @@ EOF
         bytesScannedCutoffPerQuery: 10737418240, // 10 GB
       },
     });
+
+    // Write docker-compose override with real Cognito config and restart
+    instance.addUserData(`
+cd /opt/semantic-layer
+cat > docker-compose.override.yml << EOF
+services:
+  neo4j:
+    restart: always
+    environment:
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+
+  rosetta:
+    restart: always
+    environment:
+      COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
+      COGNITO_REGION: "${cdk.Aws.REGION}"
+      AWS_DEFAULT_REGION: "${cdk.Aws.REGION}"
+      ATHENA_WORKGROUP: "${athenaWorkgroup.name}"
+      ATHENA_OUTPUT_BUCKET: "s3://${athenaBucket.bucketName}/results/"
+EOF
+
+/usr/local/bin/docker-compose up -d
+`);
 
     // ─────────────────────────────────────────────
     // S3 Bucket — React UI hosting
