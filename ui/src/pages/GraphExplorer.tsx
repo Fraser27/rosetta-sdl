@@ -253,7 +253,6 @@ export default function GraphExplorer() {
       const canvas = canvasRef.current
       const cw = (canvas?.clientWidth || 800) / zoom
       const ch = (canvas?.clientHeight || 500) / zoom
-      const pad = 30
 
       for (const n of nodes) {
         n.vx += (cw / 2 - n.x) * 0.0004 * alpha

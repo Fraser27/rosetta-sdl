@@ -200,10 +200,6 @@ async def plan_query_endpoint(request: NLQueryRequest):
                     limit=request.max_rows,
                 )
                 if compiled.is_valid:
-                    if _firewall:
-                        fw = _firewall.validate(compiled.sql)
-                        if not fw.allowed:
-                            raise HTTPException(403, fw.reason)
                     plan.intent = "metric"
                     plan.query_type = "governed"
                     plan.metric_name = compiled.metric_name
@@ -212,16 +208,18 @@ async def plan_query_endpoint(request: NLQueryRequest):
             # No metric match — generate SQL via LLM
             if not plan.sql:
                 sql = generate_sql(request.question, disambiguation, graph, _config.bedrock.query_model)
-                if _firewall:
-                    fw = _firewall.validate(sql)
-                    if not fw.allowed:
-                        raise HTTPException(403, fw.reason)
                 plan.intent = "analytical"
                 plan.query_type = "ungoverned"
                 plan.sql = sql
 
-        except HTTPException:
-            raise
+            # Firewall check — include result in plan, don't throw
+            if plan.sql and _firewall:
+                fw = _firewall.validate(plan.sql)
+                if not fw.allowed:
+                    plan.firewall = "blocked"
+                    plan.firewall_reason = fw.reason
+                    plan.denied_tables = fw.denied_tables
+
         except Exception as e:
             logger.error("Plan structured failed: %s", e)
             plan.error = str(e)

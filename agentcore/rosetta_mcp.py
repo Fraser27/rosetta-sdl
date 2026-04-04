@@ -433,6 +433,16 @@ async def plan_query(question: str) -> str:
         f"Query Type: {data.get('query_type', 'unknown')}",
     ]
 
+    # Firewall status
+    firewall = data.get("firewall", "passed")
+    lines.append(f"Firewall: {firewall.upper()}")
+    if firewall == "blocked":
+        lines.append(f"  Reason: {data.get('firewall_reason', 'unknown')}")
+        denied = data.get("denied_tables", [])
+        if denied:
+            lines.append(f"  Denied tables: {', '.join(denied)}")
+        lines.append("WARNING: This query was BLOCKED by the SQL firewall. Do NOT execute it.")
+
     if data.get("metric_name"):
         lines.append(f"Metric: {data['metric_name']} (governed — deterministic SQL)")
     if data.get("sql"):

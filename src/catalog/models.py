@@ -127,4 +127,7 @@ class QueryPlan(BaseModel):
     tables: list[str] = Field(default_factory=list)
     join_paths: list[dict] = Field(default_factory=list)
     vector_searches: list[dict] = Field(default_factory=list)  # [{bucket, index}]
+    firewall: str = "passed"  # passed | blocked
+    firewall_reason: str | None = None
+    denied_tables: list[str] = Field(default_factory=list)
     error: str | None = None
