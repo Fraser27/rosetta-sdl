@@ -26,8 +26,8 @@ services:
       NEO4J_PASSWORD: semantic-layer
       GLUE_DATABASES: ""
       VECTOR_BUCKETS: ""
-      ATHENA_WORKGROUP: primary
-      ATHENA_OUTPUT_BUCKET: ""
+      ATHENA_WORKGROUP: primary  # Overridden by CDK to 'semantic-layer-wg'
+      ATHENA_OUTPUT_BUCKET: ""  # Overridden by CDK with S3 bucket
       # METRICS_FILE: /app/sample/metrics.yaml  # uncomment to load sample metrics
       BEDROCK_QUERY_MODEL: global.anthropic.claude-sonnet-4-5-20250929-v1:0
       BEDROCK_ENRICHMENT_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0

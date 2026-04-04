@@ -4,6 +4,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import * as athena from 'aws-cdk-lib/aws-athena';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
@@ -235,10 +236,38 @@ services:
       COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
       COGNITO_REGION: "${cdk.Aws.REGION}"
       AWS_DEFAULT_REGION: "${cdk.Aws.REGION}"
+      ATHENA_WORKGROUP: "${athenaWorkgroup.name}"
+      ATHENA_OUTPUT_BUCKET: "s3://${athenaBucket.bucketName}/results/"
 EOF
 
 /usr/local/bin/docker-compose up -d
 `);
+
+    // ─────────────────────────────────────────────
+    // S3 Bucket — Athena query results
+    // ─────────────────────────────────────────────
+    const athenaBucket = new s3.Bucket(this, 'AthenaBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      lifecycleRules: [{ expiration: cdk.Duration.days(30) }],
+    });
+
+    // ─────────────────────────────────────────────
+    // Athena Workgroup
+    // ─────────────────────────────────────────────
+    const athenaWorkgroup = new athena.CfnWorkGroup(this, 'AthenaWorkgroup', {
+      name: 'semantic-layer-wg',
+      state: 'ENABLED',
+      workGroupConfiguration: {
+        resultConfiguration: {
+          outputLocation: `s3://${athenaBucket.bucketName}/results/`,
+        },
+        enforceWorkGroupConfiguration: true,
+        publishCloudWatchMetricsEnabled: true,
+        bytesScannedCutoffPerQuery: 10737418240, // 10 GB
+      },
+    });
 
     // ─────────────────────────────────────────────
     // S3 Bucket — React UI hosting
@@ -443,6 +472,16 @@ function handler(event) {
     new cdk.CfnOutput(this, 'CognitoClientId', {
       value: userPoolClient.userPoolClientId,
       description: 'Cognito App Client ID',
+    });
+
+    new cdk.CfnOutput(this, 'AthenaResultsBucket', {
+      value: athenaBucket.bucketName,
+      description: 'S3 bucket for Athena query results',
+    });
+
+    new cdk.CfnOutput(this, 'AthenaWorkgroupName', {
+      value: athenaWorkgroup.name,
+      description: 'Athena workgroup for semantic layer queries',
     });
 
     new cdk.CfnOutput(this, 'CognitoDomain', {
