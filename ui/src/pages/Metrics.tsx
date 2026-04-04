@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Metric, type MetricJoin, type TableSummary, type Column } from '../api'
+import { useNavigate } from 'react-router-dom'
+import { api, type Metric, type MetricJoin, type MetricParameter, type TableSummary, type Column } from '../api'
 
 interface JoinRow {
   table: string
@@ -10,6 +11,15 @@ interface JoinRow {
 
 const emptyJoin: JoinRow = { table: '', source_column: '', target_column: '', join_type: 'INNER' }
 
+interface ParameterRow {
+  column: string
+  operator: string
+  required: boolean
+  description: string
+}
+
+const emptyParameter: ParameterRow = { column: '', operator: '=', required: false, description: '' }
+
 interface MetricForm {
   metric_id: string
   name: string
@@ -19,6 +29,7 @@ interface MetricForm {
   source_db: string
   source_table: string
   joins: JoinRow[]
+  parameters: ParameterRow[]
   base_metrics: string[]
   synonyms: string
   grain: string
@@ -27,8 +38,8 @@ interface MetricForm {
 
 const emptyForm: MetricForm = {
   metric_id: '', name: '', definition: '', expression: '',
-  type: 'simple', source_db: '', source_table: '', joins: [], base_metrics: [],
-  synonyms: '', grain: '', filters: '',
+  type: 'simple', source_db: '', source_table: '', joins: [], parameters: [],
+  base_metrics: [], synonyms: '', grain: '', filters: '',
 }
 
 function toForm(m: Metric): MetricForm {
@@ -47,6 +58,12 @@ function toForm(m: Metric): MetricForm {
       target_column: j.target_column,
       join_type: j.join_type || 'INNER',
     })),
+    parameters: (m.parameters || []).map((p) => ({
+      column: p.column,
+      operator: p.operator || '=',
+      required: p.required || false,
+      description: p.description || '',
+    })),
     base_metrics: m.base_metrics || [],
     synonyms: (m.synonyms || []).join(', '),
     grain: (m.grain || []).join(', '),
@@ -63,6 +80,7 @@ function fromForm(f: MetricForm) {
     type: f.type,
     source_table: f.type === 'derived' ? '' : f.source_table,
     joins: f.type === 'derived' ? [] : f.joins.filter((j) => j.table && j.source_column && j.target_column),
+    parameters: f.type === 'derived' ? [] : f.parameters.filter((p) => p.column),
     base_metrics: f.type === 'derived' ? f.base_metrics : [],
     synonyms: f.synonyms ? f.synonyms.split(',').map((s) => s.trim()).filter(Boolean) : [],
     grain: f.grain ? f.grain.split(',').map((s) => s.trim()).filter(Boolean) : [],
@@ -71,6 +89,7 @@ function fromForm(f: MetricForm) {
 }
 
 export default function Metrics() {
+  const navigate = useNavigate()
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [tables, setTables] = useState<TableSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -266,6 +285,24 @@ export default function Metrics() {
     setPreviewSql(null)
   }
 
+  const addParameter = () => {
+    setForm((f) => ({ ...f, parameters: [...f.parameters, { ...emptyParameter }] }))
+    setPreviewSql(null)
+  }
+
+  const removeParameter = (idx: number) => {
+    setForm((f) => ({ ...f, parameters: f.parameters.filter((_, i) => i !== idx) }))
+    setPreviewSql(null)
+  }
+
+  const updateParameter = (idx: number, field: keyof ParameterRow, value: string | boolean) => {
+    setForm((f) => ({
+      ...f,
+      parameters: f.parameters.map((p, i) => i === idx ? { ...p, [field]: value } : p),
+    }))
+    setPreviewSql(null)
+  }
+
   const toggleBaseMetric = (metricId: string) => {
     setForm((f) => ({
       ...f,
@@ -390,6 +427,7 @@ export default function Metrics() {
                     >
                       {sqlLoading[m.metric_id] ? '...' : 'SQL'}
                     </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/graph?metric=${encodeURIComponent(m.name)}`)} style={{ marginRight: 6 }}>Graph</button>
                     <button className="btn btn-ghost btn-sm" onClick={() => openEdit(m)} style={{ marginRight: 6 }}>Edit</button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDelete(m)}>Delete</button>
                   </td>
@@ -583,6 +621,47 @@ export default function Metrics() {
                   <label>Grain (comma-separated)</label>
                   <input value={form.grain} onChange={(e) => updateField('grain', e.target.value)}
                     placeholder="e.g. order_date, c.customer_name" />
+                </div>
+
+                <div className="form-group">
+                  <label>
+                    Parameters
+                    <button className="btn btn-ghost btn-sm" onClick={addParameter} style={{ marginLeft: 8, fontSize: 11 }}>+ Add Parameter</button>
+                  </label>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
+                    Declare columns that accept runtime filter values via query_metric. If none, any filter is accepted.
+                  </p>
+                  {form.parameters.map((p, idx) => (
+                    <div key={idx} className="metric-join-row">
+                      <select value={p.column} onChange={(e) => updateParameter(idx, 'column', e.target.value)}
+                        style={{ flex: 2 }}>
+                        <option value="">-- Column --</option>
+                        {sourceColumns.map((c) => (
+                          <option key={c.name} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                      <select value={p.operator} onChange={(e) => updateParameter(idx, 'operator', e.target.value)}
+                        style={{ width: 70 }}>
+                        <option value="=">=</option>
+                        <option value="!=">!=</option>
+                        <option value=">">{'>'}</option>
+                        <option value="<">{'<'}</option>
+                        <option value=">=">{'≥'}</option>
+                        <option value="<=">{'≤'}</option>
+                        <option value="IN">IN</option>
+                        <option value="LIKE">LIKE</option>
+                      </select>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: 'var(--text-dim)' }}>
+                        <input type="checkbox" checked={p.required}
+                          onChange={(e) => updateParameter(idx, 'required', e.target.checked)} />
+                        Required
+                      </label>
+                      <input value={p.description} onChange={(e) => updateParameter(idx, 'description', e.target.value)}
+                        placeholder="Description (optional)" style={{ flex: 2 }} />
+                      <button className="btn btn-danger btn-sm" onClick={() => removeParameter(idx)}
+                        style={{ padding: '2px 8px', fontSize: 11 }}>x</button>
+                    </div>
+                  ))}
                 </div>
               </>
             )}

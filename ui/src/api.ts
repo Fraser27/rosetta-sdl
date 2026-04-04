@@ -71,6 +71,13 @@ export interface MetricJoin {
   join_type: string;
 }
 
+export interface MetricParameter {
+  column: string;
+  operator: string;
+  required: boolean;
+  description: string;
+}
+
 export interface Metric {
   metric_id: string;
   name: string;
@@ -82,6 +89,7 @@ export interface Metric {
   base_metrics: string[] | null;
   synonyms: string[] | null;
   grain: string[] | null;
+  parameters?: MetricParameter[];
   filters?: string[];
   time_grains?: string[];
   owner?: string;

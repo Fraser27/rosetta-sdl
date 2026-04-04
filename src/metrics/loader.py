@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from src.catalog.models import JoinPath, MetricDefinition
+from src.catalog.models import JoinPath, MetricDefinition, MetricParameter
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ def load_metrics(metrics_file: str) -> tuple[list[MetricDefinition], list[JoinPa
 
     metrics = []
     for m in data.get("metrics", []):
+        parameters = [
+            MetricParameter(**p) for p in m.get("parameters", [])
+        ]
         metrics.append(MetricDefinition(
             metric_id=m["metric_id"],
             name=m["name"],
@@ -37,6 +40,7 @@ def load_metrics(metrics_file: str) -> tuple[list[MetricDefinition], list[JoinPa
             source_table=m["source_table"],
             filters=m.get("filters", []),
             grain=m.get("grain", []),
+            parameters=parameters,
             time_grains=m.get("time_grains", []),
             owner=m.get("owner", ""),
         ))

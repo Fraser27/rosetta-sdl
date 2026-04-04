@@ -108,6 +108,7 @@ def _handle_structured(question: str, route_result, graph: GraphClient, workgrou
     # Check if a metric matches
     if disambiguation.metrics:
         best_metric = disambiguation.metrics[0]
+
         compiled = compile_metric(
             metric_id=best_metric["metric_id"],
             graph=graph,
@@ -199,6 +200,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
             # Check if a metric matches
             if disambiguation.metrics:
                 best_metric = disambiguation.metrics[0]
+
                 compiled = compile_metric(
                     metric_id=best_metric["metric_id"],
                     graph=graph,

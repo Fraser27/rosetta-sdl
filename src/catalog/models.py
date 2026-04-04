@@ -41,6 +41,13 @@ class MetricJoin(BaseModel):
     join_type: str = "INNER"  # INNER | LEFT | RIGHT
 
 
+class MetricParameter(BaseModel):
+    column: str
+    operator: str = "="
+    required: bool = False
+    description: str = ""
+
+
 class MetricDefinition(BaseModel):
     metric_id: str
     name: str
@@ -53,6 +60,7 @@ class MetricDefinition(BaseModel):
     base_metrics: list[str] = Field(default_factory=list)  # metric IDs this derived metric composes
     filters: list[str] = Field(default_factory=list)
     grain: list[str] = Field(default_factory=list)
+    parameters: list[MetricParameter] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
     owner: str = ""
 
@@ -89,6 +97,7 @@ class MetricSummary(BaseModel):
     base_metrics: list[str] | None = Field(default_factory=list)
     synonyms: list[str] | None = Field(default_factory=list)
     grain: list[str] | None = Field(default_factory=list)
+    parameters: list[MetricParameter] = Field(default_factory=list)
     source: str = "user"  # user | sample | yaml
 
 

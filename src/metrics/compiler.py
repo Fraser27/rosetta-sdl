@@ -76,6 +76,65 @@ def _parse_joins_json(raw: str | list | None) -> list[MetricJoinDef]:
     ]
 
 
+def _fetch_table_columns(table: str, graph: GraphClient) -> set[str]:
+    """Fetch the set of column names for a table from the graph."""
+    results = graph.query(
+        "MATCH (t:Table {full_name: $fn})-[:HAS_COLUMN]->(c:Column) "
+        "RETURN c.name AS name",
+        {"fn": table},
+    )
+    return {r["name"] for r in results}
+
+
+def _validate_dimensions(
+    dimensions: list[str],
+    table: str,
+    joins: list[MetricJoinDef],
+    graph: GraphClient,
+) -> tuple[list[str], list[str]]:
+    """Validate dimensions against actual table columns (source + joined tables).
+
+    Returns (valid_dimensions, invalid_dimensions).
+    """
+    all_columns = _fetch_table_columns(table, graph)
+    for j in joins:
+        all_columns |= _fetch_table_columns(j.table, graph)
+    if not all_columns:
+        return dimensions, []
+    valid = [d for d in dimensions if d in all_columns]
+    invalid = [d for d in dimensions if d not in all_columns]
+    return valid, invalid
+
+
+@dataclass
+class MetricParameterDef:
+    column: str
+    operator: str = "="
+    required: bool = False
+    description: str = ""
+
+
+def _parse_parameters_json(raw: str | list | None) -> list[MetricParameterDef]:
+    """Parse parameters from JSON string or list."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return [
+        MetricParameterDef(
+            column=p["column"],
+            operator=p.get("operator", "="),
+            required=p.get("required", False),
+            description=p.get("description", ""),
+        )
+        for p in raw
+        if p.get("column")
+    ]
+
+
 def compile_metric(
     metric_id: str,
     graph: GraphClient,
@@ -88,7 +147,6 @@ def compile_metric(
 
     This is fully deterministic — no LLM involved.
     """
-    dimensions = dimensions or []
     filters = filters or []
 
     # Fetch metric from graph
@@ -129,6 +187,44 @@ def compile_metric(
     name = metric.get("name", metric_id)
     metric_filters = metric.get("metric_filters") or []
     joins = _parse_joins_json(metric.get("joins_json"))
+    parameters = _parse_parameters_json(metric.get("parameters_json"))
+
+    # Validate filters against declared parameters
+    if parameters:
+        param_map = {p.column: p for p in parameters}
+        if filters:
+            for f in filters:
+                if f.column not in param_map:
+                    return CompilationResult(
+                        sql="", source_table=table, metric_name=name,
+                        is_valid=False,
+                        errors=[f"Filter on '{f.column}' not allowed — declared parameters: {list(param_map.keys())}"],
+                    )
+        # Check required parameters are provided
+        provided = {f.column for f in filters} if filters else set()
+        missing = [p.column for p in parameters if p.required and p.column not in provided]
+        if missing:
+            return CompilationResult(
+                sql="", source_table=table, metric_name=name,
+                is_valid=False,
+                errors=[f"Required parameter(s) missing: {missing}"],
+            )
+
+    # Fall back to metric grain if no dimensions provided
+    if not dimensions:
+        dimensions = list(metric.get("grain") or [])
+    else:
+        dimensions = list(dimensions)
+
+    # Validate dimensions against actual table columns
+    if dimensions and table:
+        valid_dims, invalid_dims = _validate_dimensions(dimensions, table, joins, graph)
+        if invalid_dims:
+            logger.warning(
+                "Metric '%s': invalid dimensions %s not in table columns — dropping them",
+                metric_id, invalid_dims,
+            )
+            dimensions = valid_dims
 
     # Build aliases: source table + joined tables
     used_aliases: set[str] = set()
@@ -190,6 +286,7 @@ def _fetch_metric_def(metric_id: str, graph: GraphClient) -> dict | None:
         "RETURN m.metric_id AS metric_id, m.expression AS expression, "
         "m.filters AS metric_filters, m.name AS name, "
         "m.source_table AS source_table, m.joins_json AS joins_json, "
+        "m.parameters_json AS parameters_json, "
         "m.type AS type, m.base_metrics AS base_metrics, "
         "m.grain AS grain, t.full_name AS table_name",
         {"id": metric_id},

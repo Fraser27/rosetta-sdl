@@ -35,8 +35,8 @@ SET m.name = $name, m.definition = $definition, m.expression = $expression,
     m.type = $type, m.filters = $filters, m.grain = $grain,
     m.synonyms = $synonyms, m.synonyms_text = $synonyms_text,
     m.time_grains = $time_grains, m.source_table = $source_table,
-    m.joins_json = $joins_json, m.base_metrics = $base_metrics,
-    m.source = $source
+    m.joins_json = $joins_json, m.parameters_json = $parameters_json,
+    m.base_metrics = $base_metrics, m.source = $source
 WITH m
 OPTIONAL MATCH (t:Table {full_name: $source_table})
 FOREACH (_ IN CASE WHEN t IS NOT NULL THEN [1] ELSE [] END |
@@ -145,8 +145,8 @@ RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
        m.grain AS grain, m.time_grains AS time_grains, m.filters AS filters,
        COALESCE(t.full_name, m.source_table, '') AS source_table,
-       m.joins_json AS joins_json, m.base_metrics AS base_metrics,
-       COALESCE(m.source, 'user') AS source
+       m.joins_json AS joins_json, m.parameters_json AS parameters_json,
+       m.base_metrics AS base_metrics, COALESCE(m.source, 'user') AS source
 ORDER BY m.name
 """
 
@@ -158,7 +158,7 @@ RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
        m.grain AS grain, m.time_grains AS time_grains, m.filters AS filters,
        COALESCE(m.source_table, '') AS source_table, m.joins_json AS joins_json,
-       m.base_metrics AS base_metrics,
+       m.parameters_json AS parameters_json, m.base_metrics AS base_metrics,
        COALESCE(m.source, 'user') AS source,
        t.full_name AS table_name,
        collect(c.name) AS used_columns

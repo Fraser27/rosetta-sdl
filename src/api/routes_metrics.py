@@ -7,7 +7,7 @@ import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.catalog.models import MetricJoin, MetricSummary
+from src.catalog.models import MetricJoin, MetricParameter, MetricSummary
 from src.config import SemanticLayerConfig
 from src.graph import queries
 from src.graph.client import GraphClient
@@ -47,6 +47,7 @@ class MetricCreateRequest(BaseModel):
     synonyms: list[str] = Field(default_factory=list)
     grain: list[str] = Field(default_factory=list)
     filters: list[str] = Field(default_factory=list)
+    parameters: list[MetricParameter] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
     source: str = "user"
 
@@ -71,12 +72,25 @@ def _parse_joins(raw: str | list | None) -> list[dict]:
     return raw
 
 
+def _parse_parameters(raw: str | list | None) -> list[dict]:
+    """Parse parameters_json from Neo4j into a list of dicts."""
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return raw
+
+
 @router.get("", response_model=list[MetricSummary])
 async def list_metrics():
     """List all governed metrics."""
     results = _get_graph().query(queries.LIST_METRICS)
     for r in results:
         r["joins"] = _parse_joins(r.pop("joins_json", None))
+        r["parameters"] = _parse_parameters(r.pop("parameters_json", None))
     return [MetricSummary(**r) for r in results]
 
 
@@ -88,6 +102,7 @@ async def get_metric(metric_id: str):
         raise HTTPException(404, f"Metric '{metric_id}' not found")
     result = results[0]
     result["joins"] = _parse_joins(result.pop("joins_json", None))
+    result["parameters"] = _parse_parameters(result.pop("parameters_json", None))
     return result
 
 
@@ -169,6 +184,7 @@ async def compile_metric_endpoint(metric_id: str, request: MetricQueryRequest | 
 def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -> None:
     """Shared logic for creating/updating a metric node and its relationships."""
     joins_json = json.dumps([j.model_dump() for j in req.joins]) if req.joins else "[]"
+    parameters_json = json.dumps([p.model_dump() for p in req.parameters]) if req.parameters else "[]"
     graph.write(queries.MERGE_METRIC, {
         "metric_id": metric_id,
         "name": req.name,
@@ -182,6 +198,7 @@ def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -
         "filters": req.filters,
         "time_grains": req.time_grains,
         "joins_json": joins_json,
+        "parameters_json": parameters_json,
         "base_metrics": req.base_metrics,
         "source": req.source,
     })
