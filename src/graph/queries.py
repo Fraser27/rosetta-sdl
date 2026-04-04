@@ -110,7 +110,7 @@ MATCH (t:Table)
 OPTIONAL MATCH (t)<-[:CONTAINS]-(ds:DataSource)
 RETURN t.full_name AS full_name, t.name AS name, t.database AS database,
        t.description AS description, t.catalog_type AS catalog_type,
-       ds.name AS datasource
+       COALESCE(ds.name, '') AS datasource
 ORDER BY t.full_name
 """
 
