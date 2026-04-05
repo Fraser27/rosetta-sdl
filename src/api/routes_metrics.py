@@ -162,6 +162,9 @@ async def compile_metric_endpoint(metric_id: str, request: MetricQueryRequest | 
         for f in req.filters
     ]
 
+    # Preview mode: no filters provided → show placeholders for declared parameters
+    is_preview = len(filter_clauses) == 0
+
     compiled = compile_metric(
         metric_id=metric_id,
         graph=graph,
@@ -169,6 +172,7 @@ async def compile_metric_endpoint(metric_id: str, request: MetricQueryRequest | 
         filters=filter_clauses,
         order_by=req.order_by,
         limit=req.limit or _config.max_query_rows,
+        preview=is_preview,
     )
 
     if not compiled.is_valid:

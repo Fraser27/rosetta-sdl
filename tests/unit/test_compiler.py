@@ -158,6 +158,45 @@ class TestParameterValidation:
         assert result.is_valid
         assert "WHERE" not in result.sql
 
+    def test_preview_shows_placeholders(self, mock_graph_with_params):
+        """Preview mode injects '?' placeholders for declared parameters."""
+        result = compile_metric("m_009", mock_graph_with_params, preview=True)
+        assert result.is_valid
+        assert "user_id = '?'" in result.sql
+
+    def test_preview_skips_required_check(self):
+        """Preview mode doesn't fail on missing required parameters."""
+        graph = MagicMock()
+
+        def query_side_effect(cypher, params=None):
+            if "Metric" in cypher:
+                return [{
+                    "expression": "SUM(amount)",
+                    "metric_filters": [],
+                    "name": "customer_revenue",
+                    "source_table": "apache_iceberg.payments_sample",
+                    "table_name": "apache_iceberg.payments_sample",
+                    "grain": ["user_id"],
+                    "parameters_json": json.dumps([
+                        {"column": "user_id", "operator": "=", "required": True},
+                    ]),
+                }]
+            if "HAS_COLUMN" in cypher:
+                return [{"name": "user_id"}, {"name": "amount"}]
+            return []
+
+        graph.query.side_effect = query_side_effect
+        result = compile_metric("m_009", graph, preview=True)
+        assert result.is_valid
+        assert "user_id = '?'" in result.sql
+
+    def test_preview_with_explicit_filters_validates(self, mock_graph_with_params):
+        """Preview mode with explicit filters still validates them normally."""
+        filters = [FilterClause(column="status", operator="=", value="completed")]
+        result = compile_metric("m_009", mock_graph_with_params, filters=filters, preview=True)
+        assert not result.is_valid
+        assert "not allowed" in result.errors[0]
+
 
 class TestCompileSQL:
     def test_simple_select(self):

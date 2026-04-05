@@ -142,10 +142,12 @@ def compile_metric(
     filters: list[FilterClause] | None = None,
     order_by: list[str] | None = None,
     limit: int | None = None,
+    preview: bool = False,
 ) -> CompilationResult:
     """Compile a governed metric into SQL by reading its definition from the graph.
 
     This is fully deterministic — no LLM involved.
+    When preview=True, skips required-param validation and injects '?' placeholders.
     """
     filters = filters or []
 
@@ -192,23 +194,27 @@ def compile_metric(
     # Validate filters against declared parameters
     if parameters:
         param_map = {p.column: p for p in parameters}
-        if filters:
-            for f in filters:
-                if f.column not in param_map:
-                    return CompilationResult(
-                        sql="", source_table=table, metric_name=name,
-                        is_valid=False,
-                        errors=[f"Filter on '{f.column}' not allowed — declared parameters: {list(param_map.keys())}"],
-                    )
-        # Check required parameters are provided
-        provided = {f.column for f in filters} if filters else set()
-        missing = [p.column for p in parameters if p.required and p.column not in provided]
-        if missing:
-            return CompilationResult(
-                sql="", source_table=table, metric_name=name,
-                is_valid=False,
-                errors=[f"Required parameter(s) missing: {missing}"],
-            )
+        if preview and not filters:
+            # Preview mode: inject placeholder filters for all declared parameters
+            filters = [FilterClause(column=p.column, operator=p.operator, value="?") for p in parameters]
+        else:
+            if filters:
+                for f in filters:
+                    if f.column not in param_map:
+                        return CompilationResult(
+                            sql="", source_table=table, metric_name=name,
+                            is_valid=False,
+                            errors=[f"Filter on '{f.column}' not allowed — declared parameters: {list(param_map.keys())}"],
+                        )
+            # Check required parameters are provided
+            provided = {f.column for f in filters} if filters else set()
+            missing = [p.column for p in parameters if p.required and p.column not in provided]
+            if missing:
+                return CompilationResult(
+                    sql="", source_table=table, metric_name=name,
+                    is_valid=False,
+                    errors=[f"Required parameter(s) missing: {missing}"],
+                )
 
     # Fall back to metric grain if no dimensions provided
     if not dimensions:
