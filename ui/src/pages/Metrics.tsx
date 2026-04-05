@@ -678,23 +678,6 @@ export default function Metrics() {
                 placeholder={"e.g. status != 'cancelled'"} />
             </div>
 
-            {/* SQL Preview */}
-            {editing && (
-              <div className="form-group">
-                <button
-                  className="btn btn-ghost btn-sm"
-                  onClick={handlePreviewSql}
-                  disabled={previewLoading}
-                  style={{ marginBottom: 8 }}
-                >
-                  {previewLoading ? 'Compiling...' : 'Preview Compiled SQL'}
-                </button>
-                {previewSql && (
-                  <pre className="code-block" style={{ fontSize: 12 }}>{previewSql}</pre>
-                )}
-              </div>
-            )}
-
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setShowModal(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave}
@@ -703,6 +686,29 @@ export default function Metrics() {
                   (!isDerived && !form.source_table)}>
                 {saving ? 'Saving...' : editing ? 'Update' : 'Create'}
               </button>
+            </div>
+
+            {/* SQL Preview — below save button */}
+            <div className="form-group" style={{ marginTop: 12 }}>
+              {editing ? (
+                <>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={handlePreviewSql}
+                    disabled={previewLoading}
+                    style={{ marginBottom: 8 }}
+                  >
+                    {previewLoading ? 'Compiling...' : 'Preview Compiled SQL'}
+                  </button>
+                  {previewSql && (
+                    <pre className="code-block" style={{ fontSize: 12 }}>{previewSql}</pre>
+                  )}
+                </>
+              ) : (
+                <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: 0, textAlign: 'center' }}>
+                  Save the metric to preview the compiled SQL with parameter placeholders.
+                </p>
+              )}
             </div>
           </div>
         </div>
