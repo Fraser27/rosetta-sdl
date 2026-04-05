@@ -302,6 +302,7 @@ function handler(event) {
     //   /api/*:  ALB → EC2 (FastAPI)
     // ─────────────────────────────────────────────
     const distribution = new cloudfront.Distribution(this, 'UiDistribution', {
+      comment: 'Rosetta-SDL Semantic Data Layer',
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(uiBucket),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
