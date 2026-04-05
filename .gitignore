@@ -26,6 +26,9 @@ neo4j_data/
 .env
 .env.local
 
+# Secrets / local MCP proxy
+agentcore/mcp-proxy.mjs
+
 # CDK
 cdk/
 .npm/
