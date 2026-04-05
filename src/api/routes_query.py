@@ -42,6 +42,8 @@ def _get_graph() -> GraphClient:
 
 class NLQueryRequest(BaseModel):
     question: str
+    filters: list[dict] = Field(default_factory=list, description="Explicit filters for governed metrics (e.g., [{column: 'user_id', operator: '=', value: 'user_a'}])")
+    dimensions: list[str] = Field(default_factory=list, description="Dimension columns for governed metrics (e.g., ['order_date'])")
     max_rows: int = Field(default=100, ge=1, le=1000)
     workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
@@ -70,10 +72,20 @@ async def natural_language_query(request: NLQueryRequest):
 
     workgroup = request.workgroup or _config.athena.workgroup
 
+    # Parse explicit filters for governed metrics
+    filter_clauses = [
+        CompilerFilter(column=f["column"], operator=f.get("operator", "="), value=f["value"])
+        for f in request.filters
+    ] if request.filters else None
+
     # 2. Handle structured path
     if route_result.route in ("structured", "both"):
         try:
-            sql_result = _handle_structured(request.question, route_result, graph, workgroup=workgroup)
+            sql_result = _handle_structured(
+                request.question, route_result, graph,
+                workgroup=workgroup, filters=filter_clauses,
+                dimensions=request.dimensions or None,
+            )
             response.intent = sql_result.get("intent", "analytical")
             response.query_type = sql_result.get("query_type", "ungoverned")
             response.metric_name = sql_result.get("metric_name")
@@ -99,7 +111,12 @@ async def natural_language_query(request: NLQueryRequest):
     return response
 
 
-def _handle_structured(question: str, route_result, graph: GraphClient, workgroup: str | None = None) -> dict:
+def _handle_structured(
+    question: str, route_result, graph: GraphClient,
+    workgroup: str | None = None,
+    filters: list[CompilerFilter] | None = None,
+    dimensions: list[str] | None = None,
+) -> dict:
     """Handle the structured query path."""
     wg = workgroup or _config.athena.workgroup
     # Disambiguate
@@ -112,6 +129,8 @@ def _handle_structured(question: str, route_result, graph: GraphClient, workgrou
         compiled = compile_metric(
             metric_id=best_metric["metric_id"],
             graph=graph,
+            dimensions=dimensions,
+            filters=filters,
             limit=_config.max_query_rows,
         )
         if compiled.is_valid:
@@ -190,6 +209,12 @@ async def plan_query_endpoint(request: NLQueryRequest):
     route_result = route_query(request.question, graph)
     plan = QueryPlan(route=route_result.route)
 
+    # Parse explicit filters
+    filter_clauses = [
+        CompilerFilter(column=f["column"], operator=f.get("operator", "="), value=f["value"])
+        for f in request.filters
+    ] if request.filters else None
+
     # Structured path — produce SQL without executing
     if route_result.route in ("structured", "both"):
         try:
@@ -204,6 +229,8 @@ async def plan_query_endpoint(request: NLQueryRequest):
                 compiled = compile_metric(
                     metric_id=best_metric["metric_id"],
                     graph=graph,
+                    dimensions=request.dimensions or None,
+                    filters=filter_clauses,
                     limit=request.max_rows,
                 )
                 if compiled.is_valid:

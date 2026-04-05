@@ -1,4 +1,4 @@
-"""MCP adapter — exposes the semantic layer as 8 MCP tools for Claude Code / AgentCore.
+"""MCP adapter — exposes the semantic layer as MCP tools for Claude Code / AgentCore.
 
 Pattern adapted from Fusion-main/mcp/fusion_mcp_server.py.
 
@@ -214,26 +214,27 @@ def get_metric_definition(metric_id: str) -> str:
 
 
 @mcp.tool()
-def query_metric(
-    metric_id: str,
-    dimensions: str = "",
+def execute_query(
+    question: str,
     filters: str = "",
+    dimensions: str = "",
     limit: int = 100,
 ) -> str:
-    """Execute a governed metric with optional dimensions and filters.
+    """Run a query against the data lake — governed metrics or natural language.
 
-    If the metric declares parameters, only those columns are accepted as filters.
-    Required parameters must be provided or the query will fail.
+    Routes automatically: if a governed metric matches, compiles deterministic SQL
+    (no LLM). Otherwise, generates SQL via LLM. Unstructured questions search S3 Vectors.
+
+    For governed metrics with declared parameters, pass filters to apply WHERE clauses.
+    Use list_metrics or get_metric_definition to see available parameters.
 
     Args:
-        metric_id: Metric ID
-        dimensions: Comma-separated dimension columns (e.g., "order_date,category")
-        filters: Comma-separated filters matching declared parameters (e.g., "user_id=user_a,status=completed")
+        question: Natural language question (e.g., "What was total revenue last month?")
+        filters: Comma-separated filters for governed metric parameters (e.g., "user_id=user_a,status=completed")
+        dimensions: Comma-separated dimension columns to GROUP BY (e.g., "order_date,category")
         limit: Max rows (default 100)
     """
-    body: dict = {"limit": limit}
-    if dimensions:
-        body["dimensions"] = [d.strip() for d in dimensions.split(",")]
+    body: dict = {"question": question, "max_rows": limit}
     if filters:
         parsed_filters = []
         for f in filters.split(","):
@@ -241,50 +242,16 @@ def query_metric(
                 col, val = f.split("=", 1)
                 parsed_filters.append({"column": col.strip(), "operator": "=", "value": val.strip()})
         body["filters"] = parsed_filters
+    if dimensions:
+        body["dimensions"] = [d.strip() for d in dimensions.split(",")]
 
     try:
-        data = _post(f"/metrics/{metric_id}/query", body=body)
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 403:
-            return f"Access denied: {e.response.json().get('detail', 'Unauthorized table')}"
-        if e.response.status_code == 400:
-            return f"Error: {e.response.json().get('detail', 'Query error')}"
-        raise
-
-    results = data.get("results", {})
-    columns = results.get("columns", [])
-    rows = results.get("rows", [])
-
-    lines = [
-        f"Metric: {data.get('metric', 'N/A')}",
-        f"SQL: {data.get('sql', 'N/A')}",
-        f"Results ({results.get('row_count', 0)} rows, {results.get('duration_ms', 0):.0f}ms):",
-        "",
-        " | ".join(columns),
-        "-" * max(len(" | ".join(columns)), 1),
-    ]
-    for row in rows[:50]:
-        lines.append(" | ".join(str(v) for v in row))
-    if len(rows) > 50:
-        lines.append(f"... {len(rows) - 50} more rows")
-    return "\n".join(lines)
-
-
-@mcp.tool()
-def execute_query(question: str) -> str:
-    """Run a natural language query against the data lake.
-
-    Routes automatically to structured data (Athena) or unstructured data (S3 Vectors)
-    based on the question content. Uses governed metrics when available.
-
-    Args:
-        question: Natural language question (e.g., "What was total revenue last month?")
-    """
-    try:
-        data = _post("/query/natural-language", body={"question": question})
+        data = _post("/query/natural-language", body=body)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 403:
             return f"Access denied: {e.response.json().get('detail', '')}"
+        if e.response.status_code == 400:
+            return f"Error: {e.response.json().get('detail', 'Query error')}"
         raise
 
     lines = [
@@ -304,12 +271,14 @@ def execute_query(question: str) -> str:
         columns = results.get("columns", [])
         rows = results.get("rows", [])
         lines.extend([
-            f"\nResults ({results.get('row_count', 0)} rows):",
+            f"\nResults ({results.get('row_count', 0)} rows, {results.get('duration_ms', 0):.0f}ms):",
             " | ".join(columns),
             "-" * max(len(" | ".join(columns)), 1),
         ])
         for row in rows[:50]:
             lines.append(" | ".join(str(v) for v in row))
+        if len(rows) > 50:
+            lines.append(f"... {len(rows) - 50} more rows")
 
     vector_results = data.get("vector_results")
     if vector_results:
@@ -409,11 +378,17 @@ def compose_metrics(
 
 
 @mcp.tool()
-def plan_query(question: str) -> str:
+def plan_query(
+    question: str,
+    filters: str = "",
+    dimensions: str = "",
+) -> str:
     """Plan a query WITHOUT executing it — returns SQL and/or vector search params.
 
     Use this when you want to get the SQL or search parameters from Rosetta SDL,
     then execute them yourself via separate Athena or S3Vectors MCP servers.
+
+    For governed metrics with declared parameters, pass filters to include WHERE clauses.
 
     Returns:
       - route: structured | unstructured | both
@@ -425,8 +400,20 @@ def plan_query(question: str) -> str:
 
     Args:
         question: Natural language question (e.g., "What was total revenue last month?")
+        filters: Comma-separated filters for governed metric parameters (e.g., "user_id=user_a")
+        dimensions: Comma-separated dimension columns (e.g., "order_date,category")
     """
-    data = _post("/query/plan", body={"question": question})
+    body: dict = {"question": question}
+    if filters:
+        parsed_filters = []
+        for f in filters.split(","):
+            if "=" in f:
+                col, val = f.split("=", 1)
+                parsed_filters.append({"column": col.strip(), "operator": "=", "value": val.strip()})
+        body["filters"] = parsed_filters
+    if dimensions:
+        body["dimensions"] = [d.strip() for d in dimensions.split(",")]
+    data = _post("/query/plan", body=body)
 
     lines = [
         f"Route: {data.get('route', 'unknown')}",

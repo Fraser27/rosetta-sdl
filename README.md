@@ -42,7 +42,7 @@ A **Neo4j knowledge graph** that unifies your entire data estate — tables, col
 └──────────────────────────┬──────────────────────────────────────┘
                            │ MCP Protocol (stdio)
 ┌──────────────────────────▼──────────────────────────────────────┐
-│              MCP Server (9 tools)                                 │
+│              MCP Server (8 tools)                                 │
 │         discover / query / metrics / search                      │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ REST API
@@ -95,7 +95,7 @@ A **Neo4j knowledge graph** that unifies your entire data estate — tables, col
 | **LLM Enrichment** | Bedrock generates descriptions, extracts business terms and concepts, links documents to tables |
 | **Dual Query Routing** | Graph traversal decides: structured question → Athena, unstructured → S3 Vectors, cross-system → both |
 | **Ad-hoc SQL Generation** | For questions without a matching metric, LLM generates SQL grounded in the real schema from the graph |
-| **MCP Integration** | 9 MCP tools for Claude Code, QuickSuite, Strands SDK, and Bedrock AgentCore |
+| **MCP Integration** | 8 MCP tools for Claude Code, QuickSuite, Strands SDK, and Bedrock AgentCore |
 | **Plan Mode** | `plan_query` returns SQL/search params without executing — agents can delegate execution to external Athena/S3Vectors MCP servers |
 | **React Admin UI** | Visual dashboard, table browser, metric CRUD, interactive force-directed graph explorer, light/dark mode |
 | **Cognito Auth** | JWT-based authentication. Middleware validates tokens on every API call. Disabled in local dev |
@@ -369,7 +369,7 @@ Expose Rosetta SDL as an MCP server on **Amazon Bedrock AgentCore**, enabling an
 +---------------------+
 | AgentCore Runtime   |
 | Rosetta SDL MCP     |
-| (9 tools)           |
+| (8 tools)           |
 +----------+----------+
            | HTTP
            v
@@ -517,19 +517,18 @@ RETURN node.name, node.definition, score
 
 ## MCP Tools
 
-9 tools exposed via the [Model Context Protocol](https://modelcontextprotocol.io/) for AI agent integration:
+8 tools exposed via the [Model Context Protocol](https://modelcontextprotocol.io/) for AI agent integration:
 
 | Tool | Description |
 |------|-------------|
 | `discover_data_assets` | Full-text search across tables, metrics, documents. **Start here.** |
 | `get_table_details` | Full table schema — columns, types, descriptions, join paths |
 | `find_join_path` | Shortest join path between two tables |
-| `list_metrics` | All governed metrics with expressions and synonyms |
-| `get_metric_definition` | Full metric details including filters, grain, and source table |
-| `query_metric` | Execute a governed metric with dimensions and filters |
-| `execute_query` | Natural language query — auto-routes to Athena or S3 Vectors |
+| `list_metrics` | All governed metrics with expressions, synonyms, and declared parameters |
+| `get_metric_definition` | Full metric details including filters, grain, parameters, and source table |
+| `execute_query` | **Unified query tool** — NL question + optional `filters` and `dimensions`. Governed metrics compile deterministically (no LLM); unmatched questions use LLM for SQL; unstructured routes to S3 Vectors |
 | `search_documents` | Semantic search over unstructured documents |
-| `plan_query` | **Plan-only mode** — returns SQL/search params without executing (for delegation to external MCP servers) |
+| `plan_query` | **Plan-only mode** — returns SQL/search params without executing. Also accepts `filters` and `dimensions` for governed metrics |
 
 ### Execute vs. Plan
 
@@ -679,7 +678,7 @@ rosetta-sdl/
 │   │   ├── routes_query.py      # NL query + SQL execution
 │   │   └── routes_admin.py      # Scan, enrich, clear
 │   └── mcp/
-│       └── server.py            # MCP adapter (9 tools, stdio transport)
+│       └── server.py            # MCP adapter (8 tools, stdio transport)
 ├── agentcore/                   # AgentCore deployment
 │   ├── rosetta_mcp.py           # MCP server for AgentCore Runtime (streamable-http)
 │   ├── deploy_agent.py          # Standalone deploy script (interactive/non-interactive)
@@ -794,36 +793,200 @@ metrics_file: "metrics.yaml"
 
 ### EC2 Access via SSM
 
-```bash
-# Connect to the EC2 instance (no SSH keys needed)
-aws ssm start-session --target <instance-id>
+No SSH keys or public IP required. All EC2 access is through AWS Systems Manager Session Manager.
 
-# Navigate to the project
+```bash
+# Start an interactive session (instance ID from CDK outputs)
+aws ssm start-session --target i-0xxxxxxxxxxxx
+
+# Navigate to the project directory
 cd /opt/semantic-layer
 ```
 
-### Docker Logs
+#### Run a single command remotely (non-interactive)
 
 ```bash
-# View recent logs (last 100 lines)
+# Check if Docker containers are running
+aws ssm start-session --target i-0xxxxxxxxxxxx \
+  --document-name AWS-StartInteractiveCommand \
+  --parameters command="docker ps"
+
+# Or use send-command for fire-and-forget
+aws ssm send-command \
+  --instance-ids i-0xxxxxxxxxxxx \
+  --document-name "AWS-RunShellScript" \
+  --parameters 'commands=["cd /opt/semantic-layer && docker ps"]' \
+  --output text
+```
+
+#### Pull latest code and restart on EC2
+
+```bash
+# SSM into the instance first
+aws ssm start-session --target i-0xxxxxxxxxxxx
+
+# Then on the EC2 instance:
+cd /opt/semantic-layer
+sudo git pull origin main
+sudo docker-compose up -d --build
+```
+
+### Docker Commands
+
+All services run via Docker Compose on EC2 at `/opt/semantic-layer`.
+
+```bash
+# List running containers
+docker ps
+
+# View FastAPI logs (last 100 lines)
 docker logs semantic-layer-rosetta-1 --tail 100
 
-# Follow logs in real-time
+# Follow FastAPI logs in real-time
 docker logs semantic-layer-rosetta-1 -f
 
 # View Neo4j logs
 docker logs semantic-layer-neo4j-1 --tail 100
 
-# List running containers
-docker ps
-
-# Restart services
+# Restart all services
 docker-compose restart
+
+# Rebuild and restart (after code changes)
+docker-compose up -d --build
+
+# Rebuild a single service
+docker-compose up -d --build rosetta
+
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes (WARNING: deletes Neo4j data)
+docker-compose down -v
+
+# Shell into the FastAPI container
+docker exec -it semantic-layer-rosetta-1 bash
+
+# Shell into the Neo4j container
+docker exec -it semantic-layer-neo4j-1 bash
+
+# Run a Python command inside the FastAPI container
+docker exec semantic-layer-rosetta-1 python -c "print('hello')"
+
+# Run a Cypher query against Neo4j
+docker exec semantic-layer-neo4j-1 cypher-shell -u neo4j -p semantic-layer \
+  "MATCH (m:Metric) RETURN m.metric_id, m.name, m.parameters_json LIMIT 10"
+
+# Check container resource usage
+docker stats --no-stream
 ```
 
-### Claude Code
-Add MCP to claude Code
-claude mcp add -t stdio rosetta-gw node /Users/fraseque/Fraser/Playground/aws-semantic-layer/agentcore/mcp-proxy.mjs
+### API Commands
+
+The FastAPI service runs on port 8000 inside the EC2 instance. From an SSM session:
+
+```bash
+# Health check
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# --- Catalog ---
+
+# List all tables
+curl -s http://localhost:8000/catalog/tables | python3 -m json.tool
+
+# Get table details with columns and joins
+curl -s http://localhost:8000/catalog/tables/ecommerce.orders | python3 -m json.tool
+
+# Search the catalog
+curl -s "http://localhost:8000/catalog/search?q=revenue" | python3 -m json.tool
+
+# Graph summary (node/edge counts)
+curl -s http://localhost:8000/catalog/graph | python3 -m json.tool
+
+# --- Metrics ---
+
+# List all metrics
+curl -s http://localhost:8000/metrics | python3 -m json.tool
+
+# Get a specific metric (check parameters, expression, etc.)
+curl -s http://localhost:8000/metrics/m_009 | python3 -m json.tool
+
+# Compile a metric to SQL without executing (preview mode)
+curl -s -X POST http://localhost:8000/metrics/m_009/compile \
+  -H "Content-Type: application/json" \
+  -d '{}' | python3 -m json.tool
+
+# Execute a metric with dimensions and filters
+curl -s -X POST http://localhost:8000/metrics/m_009/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dimensions": ["user_id"],
+    "filters": [{"column": "user_id", "operator": "=", "value": "user_a"}],
+    "limit": 50
+  }' | python3 -m json.tool
+
+# Create a new metric
+curl -s -X POST http://localhost:8000/metrics \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metric_id": "m_010",
+    "name": "total_orders",
+    "definition": "Count of all orders",
+    "expression": "COUNT(order_id)",
+    "type": "simple",
+    "source_table": "ecommerce.orders",
+    "filters": [],
+    "parameters": [{"column": "status", "operator": "=", "required": false}]
+  }' | python3 -m json.tool
+
+# Update a metric
+curl -s -X PUT http://localhost:8000/metrics/m_010 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metric_id": "m_010",
+    "name": "total_orders",
+    "definition": "Count of all completed orders",
+    "expression": "COUNT(order_id)",
+    "type": "simple",
+    "source_table": "ecommerce.orders",
+    "filters": ["status = '\''completed'\''"],
+    "parameters": []
+  }' | python3 -m json.tool
+
+# Delete a metric
+curl -s -X DELETE http://localhost:8000/metrics/m_010
+
+# --- Query ---
+
+# Natural language query (full pipeline: route → compile → firewall → execute)
+curl -s -X POST http://localhost:8000/query/natural-language \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is total revenue?"}' | python3 -m json.tool
+
+# Plan a query without executing (returns SQL only)
+curl -s -X POST http://localhost:8000/query/plan \
+  -H "Content-Type: application/json" \
+  -d '{"question": "total revenue by customer"}' | python3 -m json.tool
+
+# Direct SQL execution (firewall validated)
+curl -s -X POST http://localhost:8000/query/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT * FROM ecommerce.orders LIMIT 10"}' | python3 -m json.tool
+
+# --- Admin ---
+
+# Scan Glue databases and S3 Vector buckets
+curl -s -X POST http://localhost:8000/admin/scan | python3 -m json.tool
+
+# Enrich metadata with LLM (descriptions, business terms)
+curl -s -X POST http://localhost:8000/admin/enrich | python3 -m json.tool
+```
+
+### Claude Code MCP Setup
+
+```bash
+# Add MCP proxy for AgentCore Gateway
+claude mcp add -t stdio rosetta-gw node /path/to/agentcore/mcp-proxy.mjs
+```
 
 ### Common Issues
 
