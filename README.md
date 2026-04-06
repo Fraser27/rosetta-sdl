@@ -286,15 +286,10 @@ Or create metrics visually in the Admin UI at `/metrics`.
 ### Deploy with CDK
 
 ```bash
-cd cdk
-npm install
-
-# Bootstrap CDK (first time only)
-npx cdk bootstrap
-
-# Deploy everything
-npx cdk deploy
+./deploy.sh
 ```
+
+This script installs dependencies, bootstraps CDK (first time only), and deploys everything.
 
 CDK outputs:
 

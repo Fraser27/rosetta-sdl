@@ -82,7 +82,7 @@ export class RosettaSdlStack extends cdk.Stack {
     }));
 
     ec2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['s3:GetObject', 's3:PutObject', 's3:ListBucket', 's3:GetBucketLocation'],
+      actions: ['s3:*'],
       resources: ['*'],
     }));
 
@@ -102,8 +102,83 @@ export class RosettaSdlStack extends cdk.Stack {
     }));
 
     ec2Role.addToPolicy(new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:rosetta-sdl/*`],
+      actions: ['secretsmanager:*'],
+      resources: ['*'],
+    }));
+
+    // AgentCore deployment (deploy_agent.py) — Cognito, IAM, and AgentCore APIs
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'cognito-idp:ListUserPools',
+        'cognito-idp:CreateUserPool',
+        'cognito-idp:DeleteUserPool',
+        'cognito-idp:CreateUserPoolDomain',
+        'cognito-idp:DeleteUserPoolDomain',
+        'cognito-idp:DescribeResourceServer',
+        'cognito-idp:CreateResourceServer',
+        'cognito-idp:ListUserPoolClients',
+        'cognito-idp:DescribeUserPoolClient',
+        'cognito-idp:CreateUserPoolClient',
+      ],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'iam:CreateRole',
+        'iam:GetRole',
+        'iam:PutRolePolicy',
+        'iam:ListRolePolicies',
+        'iam:DeleteRolePolicy',
+        'iam:PassRole',
+        'iam:CreateServiceLinkedRole',
+      ],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['sts:GetCallerIdentity'],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:*'],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: ['agent-credential-provider:*'],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'ecr:DescribeRepositories',
+        'ecr:CreateRepository',
+        'ecr:GetAuthorizationToken',
+        'ecr:BatchCheckLayerAvailability',
+        'ecr:InitiateLayerUpload',
+        'ecr:UploadLayerPart',
+        'ecr:CompleteLayerUpload',
+        'ecr:PutImage',
+        'ecr:BatchGetImage',
+        'ecr:GetDownloadUrlForLayer',
+      ],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'codebuild:*',
+      ],
+      resources: ['*'],
+    }));
+
+    ec2Role.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'logs:*',
+      ],
+      resources: ['*'],
     }));
 
     // ─────────────────────────────────────────────
