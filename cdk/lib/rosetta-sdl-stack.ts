@@ -451,7 +451,7 @@ function handler(event) {
             image: cdk.DockerImage.fromRegistry('node:20-slim'),
             command: [
               'bash', '-c',
-              'npm ci && npm run build && cp -r dist/* /asset-output/',
+              'npm cache clean --force && npm ci --cache /tmp/.npm && npm run build && cp -r dist/* /asset-output/',
             ],
           },
         }),
