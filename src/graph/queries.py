@@ -251,6 +251,13 @@ MATCH (m:Metric {metric_id: $metric_id})
 DETACH DELETE m
 """
 
+EMBEDDING_STATS = """
+MATCH (m:Metric)
+WITH count(m) AS total,
+     count(CASE WHEN m.embedding IS NOT NULL THEN 1 END) AS embedded
+RETURN total, embedded
+"""
+
 GRAPH_DATA = """
 MATCH (n)
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
@@ -275,7 +282,10 @@ RETURN collect({
         WHEN 'Metric' THEN CASE WHEN n.source_table CONTAINS '.' THEN split(n.source_table, '.')[0] ELSE null END
         ELSE null
     END,
-    properties: {}
+    properties: CASE lbl
+        WHEN 'Metric' THEN {hasEmbedding: n.embedding IS NOT NULL}
+        ELSE {}
+    END
 }) AS nodes
 """
 

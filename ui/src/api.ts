@@ -170,6 +170,12 @@ export const api = {
       body: JSON.stringify({ metric_ids, dimensions, limit, execute: true }),
     }),
 
+  // Query
+  similarityTest: (question: string) =>
+    request<SimilarityTestResult>('/query/similarity-test', {
+      method: 'POST', body: JSON.stringify({ question }),
+    }),
+
   // Admin
   scan: () => request<Record<string, unknown>>('/admin/scan', { method: 'POST' }),
   enrich: (datasources: string[] = [], force = false, model_id = '') =>
@@ -183,6 +189,8 @@ export const api = {
   sampleDataStatus: () => request<{ loaded: boolean; datasources: number; metrics: number }>('/admin/sample-data/status'),
   loadSampleData: () => request<Record<string, unknown>>('/admin/sample-data/load', { method: 'POST' }),
   deleteSampleData: () => request<Record<string, unknown>>('/admin/sample-data', { method: 'DELETE' }),
+  embeddingStats: () => request<EmbeddingStats>('/admin/embedding-stats'),
+  reembed: () => request<{ status: string; embedded: number; total: number }>('/admin/reembed', { method: 'POST' }),
   clear: () => request<Record<string, unknown>>('/admin/clear', { method: 'POST' }),
 
   // Graph data for visualization
@@ -199,6 +207,35 @@ export interface EnrichmentJob {
   current_table: string;
   elapsed_seconds?: number;
   error?: string;
+}
+
+export interface EmbeddingStats {
+  total: number;
+  embedded: number;
+  enabled: boolean;
+  model_id: string;
+  dimensions: number;
+}
+
+export interface SimilarityTestHit {
+  metric_id: string;
+  name: string;
+  definition: string;
+  synonyms: string[] | null;
+  source_table: string;
+  score: number;
+}
+
+export interface SimilarityTestResult {
+  question: string;
+  fulltext_results: SimilarityTestHit[];
+  vector_results: SimilarityTestHit[];
+  resolution: string;
+  selected_metric: string | null;
+  thresholds: {
+    fulltext_confidence: number;
+    vector_min_score: number;
+  };
 }
 
 export interface GraphNode {

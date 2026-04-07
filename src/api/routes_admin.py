@@ -225,6 +225,22 @@ async def delete_sample_data():
     return {"status": "ok", "message": "Sample data deleted"}
 
 
+@router.get("/embedding-stats")
+async def embedding_stats():
+    """Get embedding coverage statistics for metrics."""
+    graph = _get_graph()
+    from src.graph import queries as q
+    results = graph.query(q.EMBEDDING_STATS)
+    row = results[0] if results else {"total": 0, "embedded": 0}
+    return {
+        "total": row.get("total", 0),
+        "embedded": row.get("embedded", 0),
+        "enabled": _config.embedding.enabled,
+        "model_id": _config.embedding.model_id,
+        "dimensions": _config.embedding.dimensions,
+    }
+
+
 @router.post("/reembed")
 async def reembed_all():
     """Recompute all metric embeddings. Use after changing embedding model or enrichment."""

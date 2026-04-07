@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { api, type EnrichmentJob } from '../api'
+import { api, type EnrichmentJob, type EmbeddingStats } from '../api'
 
 export default function Admin() {
   const [results, setResults] = useState<Record<string, unknown> | null>(null)
@@ -9,6 +9,9 @@ export default function Admin() {
   // Sample data state
   const [sampleLoaded, setSampleLoaded] = useState<boolean | null>(null)
   const [sampleInfo, setSampleInfo] = useState<{ datasources: number; metrics: number } | null>(null)
+
+  // Embedding state
+  const [embeddingStats, setEmbeddingStats] = useState<EmbeddingStats | null>(null)
 
   // Enrichment state
   const [datasources, setDatasources] = useState<{ name: string; table_count: number }[]>([])
@@ -27,12 +30,17 @@ export default function Admin() {
     }).catch(() => {})
   }
 
+  const refreshEmbeddingStats = () => {
+    api.embeddingStats().then(setEmbeddingStats).catch(() => {})
+  }
+
   useEffect(() => {
     api.listDatasources().then(setDatasources).catch(() => {})
     api.getConfig().then((cfg) => {
       if (cfg.enrichment_model) setDefaultModel(cfg.enrichment_model as string)
     }).catch(() => {})
     checkSampleStatus()
+    refreshEmbeddingStats()
   }, [])
 
   // Cleanup polling on unmount
@@ -370,6 +378,58 @@ export default function Admin() {
           </div>
 
           {enrichProgress}
+        </div>
+
+        <div className="admin-card">
+          <h3>Vector Embeddings</h3>
+          <p>Metric embeddings enable semantic similarity search (e.g., "price" matching "revenue"). Embeddings are computed via Amazon Titan Embed V2.</p>
+
+          {embeddingStats ? (
+            <>
+              <div style={{ margin: '12px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-dim)', marginBottom: 4 }}>
+                  <span>
+                    {embeddingStats.embedded} / {embeddingStats.total} metrics embedded
+                  </span>
+                  <span className={`tag ${embeddingStats.enabled ? 'tag-green' : 'tag-red'}`} style={{ fontSize: 11 }}>
+                    {embeddingStats.enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+                {embeddingStats.total > 0 && (
+                  <div style={{ height: 6, background: 'var(--bg-alt, var(--bg))', borderRadius: 3, overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${(embeddingStats.embedded / embeddingStats.total) * 100}%`,
+                      background: embeddingStats.embedded === embeddingStats.total ? 'var(--green)' : 'var(--orange)',
+                      borderRadius: 3,
+                      transition: 'width 0.3s',
+                    }} />
+                  </div>
+                )}
+                <p style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 8 }}>
+                  Model: <code>{embeddingStats.model_id}</code> ({embeddingStats.dimensions}d)
+                </p>
+              </div>
+
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  setLoading('reembed')
+                  try {
+                    const res = await api.reembed()
+                    showToast(`Embedded ${res.embedded}/${res.total} metrics`)
+                    refreshEmbeddingStats()
+                  } catch (e: unknown) { showToast((e as Error).message, 'error') }
+                  finally { setLoading(null) }
+                }}
+                disabled={loading !== null || !embeddingStats.enabled}
+              >
+                {loading === 'reembed' ? 'Embedding...' : 'Reembed All Metrics'}
+              </button>
+            </>
+          ) : (
+            <p style={{ fontSize: 12, color: 'var(--text-dim)' }}>Loading stats...</p>
+          )}
         </div>
 
         <div className="admin-card">

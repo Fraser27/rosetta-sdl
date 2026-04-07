@@ -275,6 +275,86 @@ async def plan_query_endpoint(request: NLQueryRequest):
     return plan
 
 
+class SimilarityTestRequest(BaseModel):
+    question: str
+
+
+@router.post("/similarity-test")
+async def similarity_test(request: SimilarityTestRequest):
+    """Test metric matching: returns both full-text and vector results with scores.
+
+    Useful for tuning thresholds and understanding how queries are resolved.
+    """
+    graph = _get_graph()
+
+    # Full-text search
+    fulltext_hits = graph.query(
+        "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+        "WHERE score > 0.1 "
+        "WITH node AS m, score "
+        "OPTIONAL MATCH (m)-[:MEASURES]->(t:Table) "
+        "RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition, "
+        "m.synonyms AS synonyms, COALESCE(t.full_name, '') AS source_table, score "
+        "ORDER BY score DESC LIMIT 10",
+        {"q": request.question},
+    )
+
+    # Vector search (if enabled)
+    vector_hits = []
+    if _config.embedding.enabled:
+        try:
+            from src.query.embeddings import get_embedding
+
+            question_vec = get_embedding(
+                request.question, _config.embedding.model_id, _config.embedding.dimensions
+            )
+            if question_vec:
+                vector_hits = graph.query(
+                    "CALL db.index.vector.queryNodes('metric_embedding', 10, $vec) "
+                    "YIELD node, score "
+                    "WHERE score > 0.1 "
+                    "WITH node AS m, score "
+                    "OPTIONAL MATCH (m)-[:MEASURES]->(t:Table) "
+                    "RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition, "
+                    "m.synonyms AS synonyms, COALESCE(t.full_name, '') AS source_table, score "
+                    "ORDER BY score DESC LIMIT 10",
+                    {"vec": question_vec},
+                )
+        except Exception as e:
+            logger.debug("Similarity test vector search failed: %s", e)
+
+    # Determine which would be selected by the current routing logic
+    ft_threshold = _config.embedding.fulltext_confidence_threshold
+    vec_min = _config.embedding.vector_min_score
+    best_ft = fulltext_hits[0] if fulltext_hits else None
+    best_vec = vector_hits[0] if vector_hits else None
+
+    if best_ft and best_ft.get("score", 0) >= ft_threshold:
+        resolution = "fulltext"
+        selected = best_ft["name"]
+    elif best_vec and best_vec.get("score", 0) >= vec_min:
+        resolution = "vector"
+        selected = best_vec["name"]
+    elif best_ft:
+        resolution = "fulltext_weak"
+        selected = best_ft["name"]
+    else:
+        resolution = "none"
+        selected = None
+
+    return {
+        "question": request.question,
+        "fulltext_results": fulltext_hits,
+        "vector_results": vector_hits,
+        "resolution": resolution,
+        "selected_metric": selected,
+        "thresholds": {
+            "fulltext_confidence": ft_threshold,
+            "vector_min_score": vec_min,
+        },
+    }
+
+
 class ComposeRequest(BaseModel):
     """Compose multiple metrics into a single CTE query."""
     metric_ids: list[str]
