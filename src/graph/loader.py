@@ -9,6 +9,7 @@ from src.graph import queries
 
 if TYPE_CHECKING:
     from src.catalog.models import DocumentMeta, JoinPath, MetricDefinition, TableMeta
+    from src.config import EmbeddingConfig
     from src.graph.client import GraphClient
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,11 @@ def load_structured(graph: GraphClient, tables: list[TableMeta], joins: list[Joi
     return count
 
 
-def load_metrics(graph: GraphClient, metrics: list[MetricDefinition]) -> int:
+def load_metrics(
+    graph: GraphClient,
+    metrics: list[MetricDefinition],
+    embedding_config: EmbeddingConfig | None = None,
+) -> int:
     """Load metric definitions into the graph. Returns count."""
     for m in metrics:
         graph.write(queries.MERGE_METRIC, {
@@ -94,8 +99,46 @@ def load_metrics(graph: GraphClient, metrics: list[MetricDefinition]) -> int:
                 "metric_id": m.metric_id,
             })
 
+    # Compute and store embeddings if enabled
+    if embedding_config and embedding_config.enabled:
+        _embed_metrics(graph, metrics, embedding_config)
+
     logger.info("Loaded %d metrics into graph", len(metrics))
     return len(metrics)
+
+
+def _embed_metrics(
+    graph: GraphClient,
+    metrics: list[MetricDefinition],
+    embedding_config: EmbeddingConfig,
+) -> None:
+    """Compute and store embeddings for metrics. Fails gracefully."""
+    try:
+        from src.query.embeddings import (
+            build_metric_embedding_text,
+            get_embeddings_batch,
+        )
+
+        texts = [
+            build_metric_embedding_text(m.name, m.definition, m.synonyms)
+            for m in metrics
+        ]
+        embeddings = get_embeddings_batch(
+            texts, embedding_config.model_id, embedding_config.dimensions
+        )
+
+        embedded_count = 0
+        for m, embedding in zip(metrics, embeddings):
+            if embedding:
+                graph.write(
+                    queries.SET_METRIC_EMBEDDING,
+                    {"metric_id": m.metric_id, "embedding": embedding},
+                )
+                embedded_count += 1
+
+        logger.info("Embedded %d/%d metrics", embedded_count, len(metrics))
+    except Exception as e:
+        logger.warning("Failed to embed metrics (continuing without embeddings): %s", e)
 
 
 def load_documents(graph: GraphClient, documents: list[DocumentMeta]) -> int:

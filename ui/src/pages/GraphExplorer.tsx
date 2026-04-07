@@ -451,6 +451,21 @@ export default function GraphExplorer() {
         ctx.stroke()
       }
 
+      // Embedding badge for Metric nodes
+      if (n.type === 'Metric') {
+        const hasEmb = n.properties?.hasEmbedding === true
+        const badgeR = 4
+        const bx = n.x + radius * 0.7
+        const by = n.y - radius * 0.7
+        ctx.beginPath()
+        ctx.arc(bx, by, badgeR, 0, Math.PI * 2)
+        ctx.fillStyle = hasEmb ? '#4ade80' : '#6b7085'
+        ctx.fill()
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1.5 / z
+        ctx.stroke()
+      }
+
       // Label
       ctx.fillStyle = labelColor
       const fontSize = n.type === 'Column' || n.type === 'MetadataKey' ? 9 : 11
@@ -465,6 +480,9 @@ export default function GraphExplorer() {
       const tx = hNode.x + 20, ty = hNode.y - 10
       const lines = [`${hNode.type}: ${hNode.label}`]
       if (hNode.datasource) lines.push(`Source: ${hNode.datasource}`)
+      if (hNode.type === 'Metric') {
+        lines.push(hNode.properties?.hasEmbedding ? 'Embedding: yes' : 'Embedding: no')
+      }
       ctx.font = '12px Inter, system-ui, sans-serif'
       const maxW = Math.max(...lines.map((l) => ctx.measureText(l).width))
       const w = maxW + 24, h = lines.length * 20 + 12

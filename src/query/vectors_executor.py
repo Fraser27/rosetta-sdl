@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import boto3
 
 from src.graph.client import GraphClient
+from src.query.embeddings import get_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +36,7 @@ def search_vectors(
         return []
 
     # Generate embedding for the question
-    bedrock = boto3.client("bedrock-runtime")
-    embed_response = bedrock.invoke_model(
-        modelId=model_id,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps({"inputText": question}),
-    )
-    embed_result = json.loads(embed_response["body"].read())
-    query_vector = embed_result.get("embedding", [])
+    query_vector = get_embedding(question, model_id)
 
     if not query_vector:
         logger.error("Failed to generate embedding")

@@ -63,7 +63,7 @@ async def scan_and_load():
 
         # Load into graph
         load_structured(graph, tables, joins)
-        load_metrics(graph, metrics)
+        load_metrics(graph, metrics, embedding_config=_config.embedding)
         summary["metrics"] = len(metrics)
 
     # 2. Scan S3 Vector buckets (auto-discover all if none configured)
@@ -178,7 +178,7 @@ async def load_sample_data():
     # 2. Load sample metrics YAML
     metrics, joins = load_metrics_yaml("sample/metrics.yaml")
     if metrics:
-        load_metrics(graph, metrics)
+        load_metrics(graph, metrics, embedding_config=_config.embedding)
 
     # 3. Load join paths from YAML (seed cypher already creates joins, but be safe)
     for jp in joins:
@@ -225,6 +225,59 @@ async def delete_sample_data():
     return {"status": "ok", "message": "Sample data deleted"}
 
 
+@router.get("/embedding-stats")
+async def embedding_stats():
+    """Get embedding coverage statistics for metrics."""
+    graph = _get_graph()
+    from src.graph import queries as q
+    results = graph.query(q.EMBEDDING_STATS)
+    row = results[0] if results else {"total": 0, "embedded": 0}
+    return {
+        "total": row.get("total", 0),
+        "embedded": row.get("embedded", 0),
+        "enabled": _config.embedding.enabled,
+        "model_id": _config.embedding.model_id,
+        "dimensions": _config.embedding.dimensions,
+    }
+
+
+@router.post("/reembed")
+async def reembed_all():
+    """Recompute all metric embeddings. Use after changing embedding model or enrichment."""
+    graph = _get_graph()
+
+    if not _config.embedding.enabled:
+        return {"status": "skipped", "reason": "Embedding is disabled"}
+
+    from src.graph import queries as q
+    from src.query.embeddings import build_metric_embedding_text, get_embeddings_batch
+
+    metrics = graph.query(q.LIST_METRICS)
+    if not metrics:
+        return {"status": "ok", "embedded": 0}
+
+    texts = [
+        build_metric_embedding_text(
+            m["name"], m.get("definition", ""), m.get("synonyms", [])
+        )
+        for m in metrics
+    ]
+    embeddings = get_embeddings_batch(
+        texts, _config.embedding.model_id, _config.embedding.dimensions
+    )
+
+    embedded_count = 0
+    for m, embedding in zip(metrics, embeddings):
+        if embedding:
+            graph.write(q.SET_METRIC_EMBEDDING, {
+                "metric_id": m["metric_id"],
+                "embedding": embedding,
+            })
+            embedded_count += 1
+
+    return {"status": "ok", "embedded": embedded_count, "total": len(metrics)}
+
+
 @router.get("/config")
 async def get_config():
     """Return current configuration (sanitized)."""
@@ -236,4 +289,11 @@ async def get_config():
         "max_query_rows": _config.max_query_rows,
         "enrichment_model": _config.bedrock.enrichment_model,
         "query_model": _config.bedrock.query_model,
+        "embedding": {
+            "enabled": _config.embedding.enabled,
+            "model_id": _config.embedding.model_id,
+            "dimensions": _config.embedding.dimensions,
+            "fulltext_confidence_threshold": _config.embedding.fulltext_confidence_threshold,
+            "vector_min_score": _config.embedding.vector_min_score,
+        },
     }

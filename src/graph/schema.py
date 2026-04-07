@@ -47,6 +47,19 @@ FULLTEXT_INDEXES = [
     ),
 ]
 
+# Vector indexes for semantic similarity search (requires Neo4j 5.11+)
+VECTOR_INDEXES = [
+    (
+        "metric_embedding",
+        "CREATE VECTOR INDEX metric_embedding IF NOT EXISTS "
+        "FOR (m:Metric) ON (m.embedding) "
+        "OPTIONS {indexConfig: {"
+        "`vector.dimensions`: 1024, "
+        "`vector.similarity_function`: 'cosine'"
+        "}}",
+    ),
+]
+
 
 def init_schema(graph: GraphClient) -> None:
     """Create constraints and indexes if they don't exist."""
@@ -62,5 +75,12 @@ def init_schema(graph: GraphClient) -> None:
             logger.info("Created/verified index: %s", name)
         except Exception as e:
             logger.warning("Index %s already exists or error: %s", name, e)
+
+    for name, cypher in VECTOR_INDEXES:
+        try:
+            graph.write(cypher)
+            logger.info("Created/verified vector index: %s", name)
+        except Exception as e:
+            logger.warning("Vector index %s creation failed (Neo4j 5.11+ required): %s", name, e)
 
     logger.info("Graph schema initialized")

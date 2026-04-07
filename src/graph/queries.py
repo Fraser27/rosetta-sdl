@@ -103,6 +103,31 @@ MATCH (bt:BusinessTerm {name: $term_name}), (c:Column {name: $column_name, table
 MERGE (bt)-[:MAPS_TO]->(c)
 """
 
+SET_METRIC_EMBEDDING = """
+MATCH (m:Metric {metric_id: $metric_id})
+SET m.embedding = $embedding
+"""
+
+VECTOR_SEARCH_METRICS = """
+CALL db.index.vector.queryNodes('metric_embedding', $top_k, $vec)
+YIELD node, score
+WHERE score > $min_score
+WITH node AS m, score
+MATCH (m)-[:MEASURES]->(t:Table)
+RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression,
+       t.full_name AS source_table, score
+ORDER BY score DESC LIMIT $limit
+"""
+
+VECTOR_SEARCH_METRICS_SIMPLE = """
+CALL db.index.vector.queryNodes('metric_embedding', $top_k, $vec)
+YIELD node, score
+WHERE score > $min_score
+RETURN 'metric' AS type, node.metric_id AS id, node.name AS name,
+       node.definition AS description, score
+ORDER BY score DESC LIMIT $limit
+"""
+
 # -- Read queries --
 
 LIST_TABLES = """
@@ -226,6 +251,13 @@ MATCH (m:Metric {metric_id: $metric_id})
 DETACH DELETE m
 """
 
+EMBEDDING_STATS = """
+MATCH (m:Metric)
+WITH count(m) AS total,
+     count(CASE WHEN m.embedding IS NOT NULL THEN 1 END) AS embedded
+RETURN total, embedded
+"""
+
 GRAPH_DATA = """
 MATCH (n)
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
@@ -250,7 +282,10 @@ RETURN collect({
         WHEN 'Metric' THEN CASE WHEN n.source_table CONTAINS '.' THEN split(n.source_table, '.')[0] ELSE null END
         ELSE null
     END,
-    properties: {}
+    properties: CASE lbl
+        WHEN 'Metric' THEN {hasEmbedding: n.embedding IS NOT NULL}
+        ELSE {}
+    END
 }) AS nodes
 """
 
