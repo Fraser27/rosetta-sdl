@@ -446,6 +446,7 @@ function handler(event) {
     new s3deploy.BucketDeployment(this, 'UiDeploy', {
       sources: [
         s3deploy.Source.asset(path.join(__dirname, '../../ui'), {
+          exclude: ['node_modules'],
           bundling: {
             image: cdk.DockerImage.fromRegistry('node:20-slim'),
             command: [
