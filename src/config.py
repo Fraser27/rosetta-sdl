@@ -46,7 +46,7 @@ class EmbeddingConfig:
     model_id: str = "amazon.titan-embed-text-v2:0"
     dimensions: int = 1024
     fulltext_confidence_threshold: float = 1.0  # below this Lucene score, try vector
-    vector_min_score: float = 0.75  # minimum cosine similarity to accept
+    vector_min_score: float = 0.6  # minimum cosine similarity to accept
     enabled: bool = True  # kill-switch for vector search
 
 
