@@ -37,3 +37,5 @@ cdk/
 .pytest_cache/
 .coverage
 htmlcov/
+agentcore/deployment_info.json
+agentcore/.bedrock_agentcore.yaml
