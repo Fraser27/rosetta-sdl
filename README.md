@@ -826,6 +826,16 @@ sudo git pull origin main
 sudo docker-compose up -d --build
 ```
 
+#### Re-deploy remotely (without SSM session)
+
+```bash
+aws ssm send-command \
+  --instance-ids <INSTANCE_ID> \
+  --document-name AWS-RunShellScript \
+  --parameters 'commands=["cd /opt/semantic-layer && git pull && /usr/local/bin/docker-compose up -d --build"]' \
+  --region us-east-1
+```
+
 ### Docker Commands
 
 All services run via Docker Compose on EC2 at `/opt/semantic-layer`.
