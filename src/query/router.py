@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from src.config import EmbeddingConfig
 from src.graph.client import GraphClient
 
 logger = logging.getLogger(__name__)
@@ -19,14 +20,19 @@ class RouteResult:
     scores: dict[str, float] = field(default_factory=dict)
 
 
-def route_query(question: str, graph: GraphClient, min_score: float = 0.3) -> RouteResult:
+def route_query(
+    question: str,
+    graph: GraphClient,
+    min_score: float = 0.3,
+    embedding_config: EmbeddingConfig | None = None,
+) -> RouteResult:
     """Route a question by searching the graph for matching nodes.
 
     Uses Neo4j full-text indexes to find matching tables, metrics, and documents,
     then decides the route based on what matched.
     """
-    # Search across all full-text indexes
-    hits = _search_all_indexes(question, graph, min_score)
+    # Search across all full-text indexes, with vector fallback
+    hits = _search_all_indexes(question, graph, min_score, embedding_config)
 
     tables = [h["id"] for h in hits if h["type"] == "table"]
     metrics = [h["id"] for h in hits if h["type"] == "metric"]
@@ -57,8 +63,13 @@ def route_query(question: str, graph: GraphClient, min_score: float = 0.3) -> Ro
     return result
 
 
-def _search_all_indexes(question: str, graph: GraphClient, min_score: float) -> list[dict]:
-    """Search all full-text indexes and return combined results."""
+def _search_all_indexes(
+    question: str,
+    graph: GraphClient,
+    min_score: float,
+    embedding_config: EmbeddingConfig | None = None,
+) -> list[dict]:
+    """Search all full-text indexes and return combined results, with vector fallback."""
     all_hits: list[dict] = []
 
     # Search tables
@@ -88,6 +99,37 @@ def _search_all_indexes(question: str, graph: GraphClient, min_score: float) -> 
         all_hits.extend(metric_hits)
     except Exception as e:
         logger.debug("Metric search failed: %s", e)
+
+    # Vector fallback for metrics: if full-text confidence is low, try semantic similarity
+    if embedding_config and embedding_config.enabled:
+        best_metric_score = max(
+            (h["score"] for h in all_hits if h.get("type") == "metric"), default=0
+        )
+        if best_metric_score < embedding_config.fulltext_confidence_threshold:
+            try:
+                from src.graph import queries as q
+                from src.query.embeddings import get_embedding
+
+                question_vec = get_embedding(
+                    question, embedding_config.model_id, embedding_config.dimensions
+                )
+                if question_vec:
+                    vector_hits = graph.query(
+                        q.VECTOR_SEARCH_METRICS_SIMPLE,
+                        {
+                            "top_k": 5,
+                            "vec": question_vec,
+                            "min_score": embedding_config.vector_min_score,
+                            "limit": 5,
+                        },
+                    )
+                    if vector_hits:
+                        logger.info(
+                            "Router vector fallback found %d metric(s)", len(vector_hits)
+                        )
+                        all_hits.extend(vector_hits)
+            except Exception as e:
+                logger.debug("Router vector fallback failed: %s", e)
 
     # Search documents
     try:

@@ -13,7 +13,12 @@ from src.graph import queries
 from src.graph.client import GraphClient
 from src.metrics.compiler import FilterClause, compile_metric
 from src.query.athena_executor import execute_query
+from src.query.embeddings import build_metric_embedding_text, get_embedding
 from src.query.firewall import SQLFirewall
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -214,6 +219,21 @@ def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -
                 "derived_id": metric_id,
                 "base_id": base_id,
             })
+
+    # Compute and store embedding for vector search
+    if _config and _config.embedding.enabled:
+        try:
+            text = build_metric_embedding_text(req.name, req.definition, req.synonyms)
+            embedding = get_embedding(
+                text, _config.embedding.model_id, _config.embedding.dimensions
+            )
+            if embedding:
+                graph.write(queries.SET_METRIC_EMBEDDING, {
+                    "metric_id": metric_id,
+                    "embedding": embedding,
+                })
+        except Exception as e:
+            logger.warning("Failed to embed metric %s: %s", metric_id, e)
 
 
 @router.post("")

@@ -42,12 +42,22 @@ class BedrockConfig:
 
 
 @dataclass
+class EmbeddingConfig:
+    model_id: str = "amazon.titan-embed-text-v2:0"
+    dimensions: int = 1024
+    fulltext_confidence_threshold: float = 1.0  # below this Lucene score, try vector
+    vector_min_score: float = 0.75  # minimum cosine similarity to accept
+    enabled: bool = True  # kill-switch for vector search
+
+
+@dataclass
 class SemanticLayerConfig:
     neo4j: Neo4jConfig = field(default_factory=Neo4jConfig)
     databases: list[DatabaseConfig] = field(default_factory=list)
     vector_buckets: list[VectorBucketConfig] = field(default_factory=list)
     athena: AthenaConfig = field(default_factory=AthenaConfig)
     bedrock: BedrockConfig = field(default_factory=BedrockConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     metrics_file: str = ""
     allowed_tables: list[str] = field(default_factory=list)
     max_query_rows: int = 500
@@ -73,6 +83,8 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
             cfg.athena = AthenaConfig(**data["athena"])
         if "bedrock" in data:
             cfg.bedrock = BedrockConfig(**data["bedrock"])
+        if "embedding" in data:
+            cfg.embedding = EmbeddingConfig(**data["embedding"])
         cfg.metrics_file = data.get("metrics_file", cfg.metrics_file)
         cfg.allowed_tables = data.get("allowed_tables", cfg.allowed_tables)
         cfg.max_query_rows = data.get("max_query_rows", cfg.max_query_rows)
@@ -106,5 +118,15 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
         cfg.bedrock.query_model = v
     if v := os.environ.get("BEDROCK_ENRICHMENT_MODEL"):
         cfg.bedrock.enrichment_model = v
+    if v := os.environ.get("EMBEDDING_MODEL_ID"):
+        cfg.embedding.model_id = v
+    if v := os.environ.get("EMBEDDING_DIMENSIONS"):
+        cfg.embedding.dimensions = int(v)
+    if v := os.environ.get("EMBEDDING_FULLTEXT_THRESHOLD"):
+        cfg.embedding.fulltext_confidence_threshold = float(v)
+    if v := os.environ.get("EMBEDDING_VECTOR_MIN_SCORE"):
+        cfg.embedding.vector_min_score = float(v)
+    if os.environ.get("EMBEDDING_ENABLED", "").lower() in ("false", "0", "no"):
+        cfg.embedding.enabled = False
 
     return cfg

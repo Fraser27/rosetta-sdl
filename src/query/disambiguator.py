@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from src.config import EmbeddingConfig
 from src.graph.client import GraphClient
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,17 @@ class DisambiguationResult:
     confidence: float = 0.0
 
 
-def disambiguate(question: str, graph: GraphClient) -> DisambiguationResult:
+def disambiguate(
+    question: str,
+    graph: GraphClient,
+    embedding_config: EmbeddingConfig | None = None,
+) -> DisambiguationResult:
     """Resolve a natural language question to specific schema elements using the graph.
 
-    1. Search metrics by name/synonym
-    2. Search tables/columns by full-text
-    3. Find join paths between matched tables
+    1. Search metrics by name/synonym (full-text)
+    2. If full-text confidence is low, fall back to vector similarity
+    3. Search tables/columns by full-text
+    4. Find join paths between matched tables
     """
     result = DisambiguationResult()
 
@@ -39,6 +45,34 @@ def disambiguate(question: str, graph: GraphClient) -> DisambiguationResult:
         "ORDER BY score DESC LIMIT 5",
         {"q": question},
     )
+    # Vector fallback: if full-text confidence is low, try semantic similarity
+    if embedding_config and embedding_config.enabled:
+        best_ft_score = max((h.get("score", 0) for h in metric_hits), default=0)
+        if best_ft_score < embedding_config.fulltext_confidence_threshold:
+            from src.graph import queries as q
+            from src.query.embeddings import get_embedding
+
+            question_vec = get_embedding(
+                question, embedding_config.model_id, embedding_config.dimensions
+            )
+            if question_vec:
+                vector_hits = graph.query(
+                    q.VECTOR_SEARCH_METRICS,
+                    {
+                        "top_k": 5,
+                        "vec": question_vec,
+                        "min_score": embedding_config.vector_min_score,
+                        "limit": 5,
+                    },
+                )
+                if vector_hits:
+                    logger.info(
+                        "Vector fallback found %d metric(s) (best=%.3f)",
+                        len(vector_hits),
+                        vector_hits[0].get("score", 0),
+                    )
+                    metric_hits = vector_hits
+
     result.metrics = metric_hits
 
     # Collect tables from metric matches

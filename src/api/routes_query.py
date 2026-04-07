@@ -67,7 +67,7 @@ async def natural_language_query(request: NLQueryRequest):
     graph = _get_graph()
 
     # 1. Route the query
-    route_result = route_query(request.question, graph)
+    route_result = route_query(request.question, graph, embedding_config=_config.embedding)
     response = QueryResponse(route=route_result.route)
 
     workgroup = request.workgroup or _config.athena.workgroup
@@ -119,8 +119,8 @@ def _handle_structured(
 ) -> dict:
     """Handle the structured query path."""
     wg = workgroup or _config.athena.workgroup
-    # Disambiguate
-    disambiguation = disambiguate(question, graph)
+    # Disambiguate (with vector fallback for metric matching)
+    disambiguation = disambiguate(question, graph, embedding_config=_config.embedding)
 
     # Check if a metric matches
     if disambiguation.metrics:
@@ -206,7 +206,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
     """
     graph = _get_graph()
 
-    route_result = route_query(request.question, graph)
+    route_result = route_query(request.question, graph, embedding_config=_config.embedding)
     plan = QueryPlan(route=route_result.route)
 
     # Parse explicit filters
@@ -218,7 +218,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
     # Structured path — produce SQL without executing
     if route_result.route in ("structured", "both"):
         try:
-            disambiguation = disambiguate(request.question, graph)
+            disambiguation = disambiguate(request.question, graph, embedding_config=_config.embedding)
             plan.tables = disambiguation.tables
             plan.join_paths = disambiguation.join_paths
 

@@ -103,6 +103,31 @@ MATCH (bt:BusinessTerm {name: $term_name}), (c:Column {name: $column_name, table
 MERGE (bt)-[:MAPS_TO]->(c)
 """
 
+SET_METRIC_EMBEDDING = """
+MATCH (m:Metric {metric_id: $metric_id})
+SET m.embedding = $embedding
+"""
+
+VECTOR_SEARCH_METRICS = """
+CALL db.index.vector.queryNodes('metric_embedding', $top_k, $vec)
+YIELD node, score
+WHERE score > $min_score
+WITH node AS m, score
+MATCH (m)-[:MEASURES]->(t:Table)
+RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression,
+       t.full_name AS source_table, score
+ORDER BY score DESC LIMIT $limit
+"""
+
+VECTOR_SEARCH_METRICS_SIMPLE = """
+CALL db.index.vector.queryNodes('metric_embedding', $top_k, $vec)
+YIELD node, score
+WHERE score > $min_score
+RETURN 'metric' AS type, node.metric_id AS id, node.name AS name,
+       node.definition AS description, score
+ORDER BY score DESC LIMIT $limit
+"""
+
 # -- Read queries --
 
 LIST_TABLES = """
