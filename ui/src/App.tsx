@@ -10,6 +10,7 @@ import GraphExplorer from './pages/GraphExplorer'
 import QueryBuilder from './pages/QueryBuilder'
 import Documents from './pages/Documents'
 import Admin from './pages/Admin'
+import Datasources from './pages/Datasources'
 import SimilarityExplorer from './pages/SimilarityExplorer'
 import Login from './pages/Login'
 
@@ -60,6 +61,7 @@ function App() {
           <NavLink to="/metrics">Metrics</NavLink>
           <NavLink to="/query-builder">Query Builder</NavLink>
           <NavLink to="/graph">Graph Explorer</NavLink>
+          <NavLink to="/datasources">Datasources</NavLink>
           <NavLink to="/similarity">Similarity Explorer</NavLink>
           <NavLink to="/admin">Admin</NavLink>
         </nav>
@@ -93,6 +95,7 @@ function App() {
           <Route path="/metrics" element={<Metrics />} />
           <Route path="/query-builder" element={<QueryBuilder />} />
           <Route path="/graph" element={<GraphExplorer />} />
+          <Route path="/datasources" element={<Datasources />} />
           <Route path="/similarity" element={<SimilarityExplorer />} />
           <Route path="/admin" element={<Admin />} />
         </Routes>

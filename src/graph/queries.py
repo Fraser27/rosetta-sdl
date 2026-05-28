@@ -7,6 +7,60 @@ MERGE (ds:DataSource {name: $name})
 SET ds.glue_database = $glue_database, ds.catalog_type = $catalog_type
 """
 
+# -- Datasource management (executor-backed) --
+
+UPSERT_DATASOURCE_FULL = """
+MERGE (ds:DataSource {datasource_id: $datasource_id})
+SET ds.name = $name, ds.type = $type, ds.endpoint = $endpoint,
+    ds.database = $database, ds.region = $region,
+    ds.secret_arn = $secret_arn, ds.status = $status,
+    ds.enabled = $enabled, ds.created_at = coalesce(ds.created_at, $created_at),
+    ds.last_health_check = $last_health_check
+"""
+
+LIST_DATASOURCES_FULL = """
+MATCH (ds:DataSource)
+WHERE ds.datasource_id IS NOT NULL
+OPTIONAL MATCH (m:Metric)-[:EXECUTES_ON]->(ds)
+RETURN ds.datasource_id AS datasource_id, ds.name AS name, ds.type AS type,
+       ds.endpoint AS endpoint, ds.database AS database, ds.region AS region,
+       ds.secret_arn AS secret_arn, ds.status AS status, ds.enabled AS enabled,
+       ds.last_health_check AS last_health_check, ds.created_at AS created_at,
+       count(m) AS metric_count
+ORDER BY ds.name
+"""
+
+GET_DATASOURCE = """
+MATCH (ds:DataSource {datasource_id: $datasource_id})
+OPTIONAL MATCH (m:Metric)-[:EXECUTES_ON]->(ds)
+RETURN ds.datasource_id AS datasource_id, ds.name AS name, ds.type AS type,
+       ds.endpoint AS endpoint, ds.database AS database, ds.region AS region,
+       ds.secret_arn AS secret_arn, ds.status AS status, ds.enabled AS enabled,
+       ds.last_health_check AS last_health_check, ds.created_at AS created_at,
+       count(m) AS metric_count
+"""
+
+DELETE_DATASOURCE = """
+MATCH (ds:DataSource {datasource_id: $datasource_id})
+DETACH DELETE ds
+"""
+
+GET_METRICS_FOR_DATASOURCE = """
+MATCH (m:Metric)-[:EXECUTES_ON]->(ds:DataSource {datasource_id: $datasource_id})
+RETURN m.metric_id AS metric_id, m.name AS name, m.enabled AS enabled,
+       m.disabled_reason AS disabled_reason
+"""
+
+LINK_METRIC_TO_DATASOURCE = """
+MATCH (m:Metric {metric_id: $metric_id}), (ds:DataSource {datasource_id: $datasource_id})
+MERGE (m)-[:EXECUTES_ON]->(ds)
+"""
+
+UNLINK_METRIC_FROM_DATASOURCE = """
+MATCH (m:Metric {metric_id: $metric_id})-[r:EXECUTES_ON]->()
+DELETE r
+"""
+
 MERGE_TABLE = """
 MERGE (t:Table {full_name: $full_name})
 SET t.name = $name, t.database = $database, t.description = $description,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type Metric, type MetricJoin, type TableSummary, type Column } from '../api'
+import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource } from '../api'
 
 interface JoinRow {
   table: string
@@ -28,6 +28,7 @@ interface MetricForm {
   type: string
   source_db: string
   source_table: string
+  datasource_id: string
   joins: JoinRow[]
   parameters: ParameterRow[]
   base_metrics: string[]
@@ -38,7 +39,7 @@ interface MetricForm {
 
 const emptyForm: MetricForm = {
   metric_id: '', name: '', definition: '', expression: '',
-  type: 'simple', source_db: '', source_table: '', joins: [], parameters: [],
+  type: 'simple', source_db: '', source_table: '', datasource_id: '', joins: [], parameters: [],
   base_metrics: [], synonyms: '', grain: '', filters: '',
 }
 
@@ -52,6 +53,7 @@ function toForm(m: Metric): MetricForm {
     type: m.type,
     source_db: sourceDb,
     source_table: m.source_table,
+    datasource_id: (m as any).datasource_id || '',
     joins: (m.joins || []).map((j) => ({
       table: j.table,
       source_column: j.source_column,
@@ -79,6 +81,7 @@ function fromForm(f: MetricForm) {
     expression: f.expression,
     type: f.type,
     source_table: f.type === 'derived' ? '' : f.source_table,
+    datasource_id: f.datasource_id || undefined,
     joins: f.type === 'derived' ? [] : f.joins.filter((j) => j.table && j.source_column && j.target_column),
     parameters: f.type === 'derived' ? [] : f.parameters.filter((p) => p.column),
     base_metrics: f.type === 'derived' ? f.base_metrics : [],
@@ -92,6 +95,7 @@ export default function Metrics() {
   const navigate = useNavigate()
   const [metrics, setMetrics] = useState<Metric[]>([])
   const [tables, setTables] = useState<TableSummary[]>([])
+  const [datasources, setDatasources] = useState<DataSource[]>([])
   const [loading, setLoading] = useState(true)
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Metric | null>(null)
@@ -111,8 +115,8 @@ export default function Metrics() {
   const [sqlLoading, setSqlLoading] = useState<Record<string, boolean>>({})
 
   const load = () => {
-    Promise.all([api.listMetrics(), api.listTables()])
-      .then(([m, t]) => { setMetrics(m); setTables(t) })
+    Promise.all([api.listMetrics(), api.listTables(), api.listDatasourcesFull()])
+      .then(([m, t, ds]) => { setMetrics(m); setTables(t); setDatasources(ds) })
       .catch(console.error)
       .finally(() => setLoading(false))
   }
@@ -559,6 +563,16 @@ export default function Metrics() {
                       ))}
                     </select>
                   </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Datasource</label>
+                  <select value={form.datasource_id} onChange={(e) => updateField('datasource_id', e.target.value)}>
+                    <option value="">-- Default (Athena) --</option>
+                    {datasources.map((ds) => (
+                      <option key={ds.datasource_id} value={ds.datasource_id}>{ds.name} ({ds.type})</option>
+                    ))}
+                  </select>
                 </div>
 
                 <div className="form-group">

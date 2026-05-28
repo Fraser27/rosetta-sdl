@@ -195,6 +195,21 @@ export const api = {
 
   // Graph data for visualization
   graphData: () => request<{ nodes: GraphNode[]; edges: GraphEdge[] }>('/catalog/graph/data'),
+
+  // Datasources
+  listDatasourcesFull: () => request<DataSource[]>('/datasources'),
+  getDatasource: (id: string) => request<DataSource>(`/datasources/${id}`),
+  createDatasource: (ds: DataSourceRequest) =>
+    request<DataSource>('/datasources', { method: 'POST', body: JSON.stringify(ds) }),
+  updateDatasource: (id: string, ds: DataSourceRequest) =>
+    request<{ ok: boolean }>(`/datasources/${id}`, { method: 'PUT', body: JSON.stringify(ds) }),
+  deleteDatasource: (id: string) =>
+    request<{ ok: boolean }>(`/datasources/${id}`, { method: 'DELETE' }),
+  datasourceMetrics: (id: string) => request<{ metric_id: string; name: string; enabled: boolean }[]>(`/datasources/${id}/metrics`),
+  testDatasource: (id: string) =>
+    request<{ job_id: string }>(`/datasources/${id}/test`, { method: 'POST' }),
+  pollTestConnection: (dsId: string, jobId: string) =>
+    request<TestConnectionJob>(`/datasources/${dsId}/test/${jobId}`),
 };
 
 export interface EnrichmentJob {
@@ -250,4 +265,45 @@ export interface GraphEdge {
   source: string;
   target: string;
   type: string;
+}
+
+export interface DataSource {
+  datasource_id: string;
+  name: string;
+  type: string;
+  endpoint: string;
+  database: string;
+  region: string;
+  status: string;
+  enabled: boolean;
+  metric_count: number;
+  last_health_check: string | null;
+  created_at: string | null;
+}
+
+export interface DataSourceRequest {
+  name: string;
+  type: string;
+  endpoint: string;
+  database: string;
+  region: string;
+  secret_arn?: string | null;
+  output_location?: string | null;
+}
+
+export interface TestConnectionStep {
+  name: string;
+  status: string;
+  duration_ms: number | null;
+  error: string | null;
+}
+
+export interface TestConnectionJob {
+  job_id: string;
+  datasource_id: string;
+  status: string;
+  steps: TestConnectionStep[];
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
 }

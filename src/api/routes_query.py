@@ -9,9 +9,11 @@ from pydantic import BaseModel, Field
 
 from src.catalog.models import QueryPlan, QueryResponse
 from src.config import SemanticLayerConfig
+from src.executors.base import HealthStatus
+from src.executors.registry import registry
 from src.graph.client import GraphClient
 from src.metrics.compiler import compile_metric, compose_metrics, FilterClause as CompilerFilter
-from src.query.athena_executor import execute_query
+from src.query.athena_executor import execute_query as athena_execute_query
 from src.query.disambiguator import disambiguate
 from src.query.firewall import SQLFirewall
 from src.query.generator import generate_sql
@@ -81,7 +83,7 @@ async def natural_language_query(request: NLQueryRequest):
     # 2. Handle structured path
     if route_result.route in ("structured", "both"):
         try:
-            sql_result = _handle_structured(
+            sql_result = await _handle_structured(
                 request.question, route_result, graph,
                 workgroup=workgroup, filters=filter_clauses,
                 dimensions=request.dimensions or None,
@@ -111,7 +113,47 @@ async def natural_language_query(request: NLQueryRequest):
     return response
 
 
-def _handle_structured(
+def _resolve_executor_for_metric(metric_id: str, graph: GraphClient):
+    """Resolve the executor for a metric via its EXECUTES_ON relationship."""
+    results = graph.query(
+        "MATCH (m:Metric {metric_id: $mid})-[:EXECUTES_ON]->(ds:DataSource) "
+        "RETURN ds.datasource_id AS datasource_id",
+        {"mid": metric_id},
+    )
+    if results:
+        ds_id = results[0]["datasource_id"]
+        return registry.get(ds_id)
+    # Fallback to default Athena
+    return registry.get("ds_default_athena")
+
+
+async def _execute_on_datasource(sql: str, metric_id: str | None, graph: GraphClient, max_rows: int) -> dict:
+    """Execute SQL using the appropriate executor (resolved from metric or default)."""
+    executor = None
+    if metric_id:
+        executor = _resolve_executor_for_metric(metric_id, graph)
+
+    if executor:
+        result = await executor.execute(sql, max_rows=max_rows)
+        return {
+            "columns": result.columns,
+            "rows": result.rows,
+            "row_count": result.row_count,
+            "duration_ms": result.duration_ms,
+            "query_execution_id": result.query_execution_id,
+            "error": result.error,
+        }
+    else:
+        # Fallback to legacy athena executor
+        return athena_execute_query(
+            sql=sql,
+            workgroup=_config.athena.workgroup,
+            output_location=_config.athena.output_bucket,
+            max_rows=max_rows,
+        )
+
+
+async def _handle_structured(
     question: str, route_result, graph: GraphClient,
     workgroup: str | None = None,
     filters: list[CompilerFilter] | None = None,
@@ -125,6 +167,15 @@ def _handle_structured(
     # Check if a metric matches
     if disambiguation.metrics:
         best_metric = disambiguation.metrics[0]
+
+        # Check if metric is disabled
+        metric_enabled = graph.query(
+            "MATCH (m:Metric {metric_id: $mid}) RETURN m.enabled AS enabled, m.disabled_reason AS reason",
+            {"mid": best_metric["metric_id"]},
+        )
+        if metric_enabled and metric_enabled[0].get("enabled") is False:
+            reason = metric_enabled[0].get("reason", "unknown")
+            raise HTTPException(503, f"Metric '{best_metric.get('name', best_metric['metric_id'])}' is disabled: {reason}")
 
         compiled = compile_metric(
             metric_id=best_metric["metric_id"],
@@ -140,12 +191,8 @@ def _handle_structured(
                 if not fw.allowed:
                     raise HTTPException(403, fw.reason)
 
-            result = execute_query(
-                sql=compiled.sql,
-                workgroup=wg,
-                output_location=_config.athena.output_bucket,
-                max_rows=_config.max_query_rows,
-            )
+            # Execute via resolved executor
+            result = await _execute_on_datasource(compiled.sql, best_metric["metric_id"], graph, _config.max_query_rows)
             return {
                 "intent": "metric",
                 "query_type": "governed",
@@ -163,7 +210,8 @@ def _handle_structured(
         if not fw.allowed:
             raise HTTPException(403, fw.reason)
 
-    result = execute_query(
+    # For ungoverned queries, use legacy Athena executor (no datasource binding)
+    result = athena_execute_query(
         sql=sql,
         workgroup=wg,
         output_location=_config.athena.output_bucket,

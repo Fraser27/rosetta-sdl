@@ -248,6 +248,9 @@ def execute_query(
     try:
         data = _post("/query/natural-language", body=body)
     except httpx.HTTPStatusError as e:
+        if e.response.status_code == 503:
+            detail = e.response.json().get("detail", "")
+            return f"Metric unavailable — datasource offline: {detail}\nUse list_metrics() to see available metrics."
         if e.response.status_code == 403:
             return f"Access denied: {e.response.json().get('detail', '')}"
         if e.response.status_code == 400:

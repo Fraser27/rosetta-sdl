@@ -15,6 +15,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT document_unique IF NOT EXISTS FOR (d:Document) REQUIRE d.s3_key IS UNIQUE",
     "CREATE CONSTRAINT business_term_unique IF NOT EXISTS FOR (bt:BusinessTerm) REQUIRE bt.name IS UNIQUE",
     "CREATE CONSTRAINT datasource_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.name IS UNIQUE",
+    "CREATE CONSTRAINT datasource_id_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.datasource_id IS UNIQUE",
     "CREATE CONSTRAINT concept_unique IF NOT EXISTS FOR (c:Concept) REQUIRE c.name IS UNIQUE",
 ]
 
