@@ -5,8 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-import boto3
-
+from src import aws_clients
 from src.graph.client import GraphClient
 from src.query.disambiguator import DisambiguationResult
 
@@ -49,7 +48,7 @@ def generate_sql(
         "- Return ONLY the SQL query, no explanation\n"
     )
 
-    bedrock = boto3.client("bedrock-runtime")
+    bedrock = aws_clients.client("bedrock-runtime")
     response = bedrock.invoke_model(
         modelId=model_id,
         contentType="application/json",

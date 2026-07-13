@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import boto3
-
+from src import aws_clients
 from src.catalog.models import ColumnMeta, TableMeta
 from src.config import DatabaseConfig
 
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def discover_all_databases() -> list[TableMeta]:
     """Auto-discover ALL Glue databases and scan every table in each."""
-    glue = boto3.client("glue")
+    glue = aws_clients.client("glue")
     all_tables: list[TableMeta] = []
 
     logger.info("Auto-discovering all Glue databases...")
@@ -44,7 +43,7 @@ def discover_all_databases() -> list[TableMeta]:
 
 def scan_databases(databases: list[DatabaseConfig]) -> list[TableMeta]:
     """Scan Glue catalog for all tables in the configured databases."""
-    glue = boto3.client("glue")
+    glue = aws_clients.client("glue")
     all_tables: list[TableMeta] = []
 
     for db_config in databases:

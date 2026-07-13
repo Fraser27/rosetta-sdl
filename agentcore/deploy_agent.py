@@ -30,8 +30,11 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-# Set AWS region
-os.environ['AWS_DEFAULT_REGION'] = os.environ.get('AWS_REGION', 'us-east-1')
+# Set AWS region — prefer AWS_DEFAULT_REGION (boto3's native var), fall back to
+# AWS_REGION, then default. Matches the app's region precedence in src/config.py.
+os.environ['AWS_DEFAULT_REGION'] = (
+    os.environ.get('AWS_DEFAULT_REGION') or os.environ.get('AWS_REGION', 'us-east-1')
+)
 REGION = os.environ['AWS_DEFAULT_REGION']
 
 # ============================================================================

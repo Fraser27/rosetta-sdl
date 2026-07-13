@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import sys
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
+from src import aws_clients
 from src.api import routes_admin, routes_catalog, routes_metrics, routes_query
 from src.auth import CognitoAuthMiddleware
 from src.config import load_config
@@ -25,6 +26,9 @@ logger = logging.getLogger("semantic-layer")
 
 # Load config
 config = load_config()
+
+# Configure the shared boto3 session before any client is created.
+aws_clients.configure(config.aws_region)
 
 # Initialize Neo4j
 graph = GraphClient(config.neo4j.uri, config.neo4j.user, config.neo4j.password)
@@ -71,8 +75,12 @@ app.include_router(routes_admin.router)
 
 
 @app.get("/health")
-async def health():
+async def health(response: Response):
     neo4j_ok = graph.verify_connectivity()
+    # Return 503 when Neo4j is unreachable so the load balancer stops routing
+    # to this instance until it can actually serve queries.
+    if not neo4j_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
         "status": "healthy" if neo4j_ok else "degraded",
         "service": "semantic-layer",

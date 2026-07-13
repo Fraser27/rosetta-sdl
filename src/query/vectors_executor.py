@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import boto3
-
+from src import aws_clients
 from src.graph.client import GraphClient
 from src.query.embeddings import get_embedding
 
@@ -43,7 +42,7 @@ def search_vectors(
         return []
 
     # Search each vector index
-    s3vectors = boto3.client("s3vectors")
+    s3vectors = aws_clients.client("s3vectors")
     all_results: list[dict] = []
 
     for doc in docs:

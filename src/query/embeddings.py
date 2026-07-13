@@ -4,20 +4,28 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
 
-import boto3
+from src import aws_clients
 
 logger = logging.getLogger(__name__)
 
-# Lazy-initialized Bedrock client (reused across calls)
-_bedrock_client = None
+# Lazy-initialized Bedrock client (reused across calls). The lock guards the
+# first-time creation because get_embeddings_batch calls this from a
+# ThreadPoolExecutor, so multiple workers could otherwise race on the initial
+# aws_clients.client() call (boto3 client creation is not thread-safe).
+_bedrock_client: Any = None
+_bedrock_lock = threading.Lock()
 
 
-def _get_bedrock_client():
+def _get_bedrock_client() -> Any:
     global _bedrock_client
     if _bedrock_client is None:
-        _bedrock_client = boto3.client("bedrock-runtime")
+        with _bedrock_lock:
+            if _bedrock_client is None:
+                _bedrock_client = aws_clients.client("bedrock-runtime")
     return _bedrock_client
 
 
