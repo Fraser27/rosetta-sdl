@@ -9,8 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-import boto3
-
+from src import aws_clients
 from src.graph import queries
 from src.graph.client import GraphClient
 
@@ -203,7 +202,7 @@ def _run_enrichment(job: EnrichmentJob, graph: GraphClient, model_id: str) -> No
     try:
         job.status = "running"
         job.started_at = time.time()
-        bedrock = boto3.client("bedrock-runtime")
+        bedrock = aws_clients.client("bedrock-runtime")
 
         # ── Tables ──
         # Build datasource filter
@@ -325,7 +324,7 @@ def start_enrichment(
 # Keep legacy sync functions for backward compat (MCP tools, etc.)
 def enrich_tables(graph: GraphClient, model_id: str, force: bool = False) -> dict:
     """Sync enrichment — enriches all tables."""
-    bedrock = boto3.client("bedrock-runtime")
+    bedrock = aws_clients.client("bedrock-runtime")
     table_query = (
         "MATCH (t:Table) "
         "OPTIONAL MATCH (t)-[:HAS_COLUMN]->(c:Column) "
@@ -344,7 +343,7 @@ def enrich_tables(graph: GraphClient, model_id: str, force: bool = False) -> dic
 
 def enrich_documents(graph: GraphClient, model_id: str, force: bool = False) -> dict:
     """Sync enrichment — enriches all documents."""
-    bedrock = boto3.client("bedrock-runtime")
+    bedrock = aws_clients.client("bedrock-runtime")
     where = "" if force else "WHERE d.description IS NULL OR d.description = '' "
     docs = graph.query(
         f"MATCH (d:Document) {where}"

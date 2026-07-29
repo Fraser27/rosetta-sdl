@@ -17,6 +17,17 @@ export class RosettaSdlStack extends cdk.Stack {
     super(scope, id, props);
 
     // ─────────────────────────────────────────────
+    // Neo4j backend selector
+    //   Default (no flag): Community Edition in a local container on EC2.
+    //   `cdk deploy -c neo4j=aura`: connect to hosted AuraDB, drop the local
+    //   container, downsize EC2, and source credentials from Secrets Manager.
+    //   Override the secret name with `-c neo4jSecretName=<name>`.
+    // ─────────────────────────────────────────────
+    const useAura = this.node.tryGetContext('neo4j') === 'aura';
+    const auraSecretName =
+      this.node.tryGetContext('neo4jSecretName') ?? 'rosetta-sdl/neo4j';
+
+    // ─────────────────────────────────────────────
     // VPC — public (ALB, NAT) + private (EC2)
     // ─────────────────────────────────────────────
     const vpc = new ec2.Vpc(this, 'Vpc', {
@@ -182,11 +193,16 @@ export class RosettaSdlStack extends cdk.Stack {
 
     // ─────────────────────────────────────────────
     // EC2 Instance — private subnet, Neo4j + FastAPI
+    //   CE hosts Neo4j locally (t4g.medium); Aura offloads the DB, so the
+    //   instance only runs FastAPI and can be downsized to t4g.small.
     // ─────────────────────────────────────────────
     const instance = new ec2.Instance(this, 'SemanticLayerEc2', {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MEDIUM),
+      instanceType: ec2.InstanceType.of(
+        ec2.InstanceClass.T4G,
+        useAura ? ec2.InstanceSize.SMALL : ec2.InstanceSize.MEDIUM,
+      ),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({
         cpuType: ec2.AmazonLinuxCpuType.ARM_64,
       }),
@@ -231,8 +247,10 @@ chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 git clone https://github.com/Fraser27/rosetta-sdl.git /opt/semantic-layer
 cd /opt/semantic-layer
 
-# Build Neo4j + FastAPI (without Cognito config yet — added after user pool is created)
-/usr/local/bin/docker-compose up -d --build
+# Build the FastAPI image now but do not start it. The app is started once,
+# below, after the full docker-compose override (Cognito, Athena, and on Aura
+# the Neo4j secret name) is written — so it never runs with incomplete config.
+/usr/local/bin/docker-compose build
 
 echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
 `);
@@ -319,18 +337,35 @@ echo "Semantic Layer EC2 setup complete" > /opt/semantic-layer/setup.log
       },
     });
 
-    // Write docker-compose override with real Cognito config and restart
-    instance.addUserData(`
-cd /opt/semantic-layer
-cat > docker-compose.override.yml << EOF
-services:
-  neo4j:
+    // The local neo4j service only exists on CE (Aura has no local container).
+    const neo4jServiceOverride = useAura
+      ? ''
+      : `  neo4j:
     restart: always
     environment:
       NEO4J_server_memory_heap_initial__size: 512m
       NEO4J_server_memory_heap_max__size: 1g
 
-  rosetta:
+`;
+
+    // On Aura, hand the app only the secret name. The app fetches the actual
+    // credentials from Secrets Manager at startup (via the EC2 role), so the
+    // password is never written to disk here or into the template.
+    const rosettaNeo4jEnv = useAura
+      ? `      NEO4J_SECRET_NAME: "${auraSecretName}"
+`
+      : '';
+
+    const composeUp = useAura
+      ? '/usr/local/bin/docker-compose up -d'
+      : '/usr/local/bin/docker-compose --profile ce up -d';
+
+    // Write docker-compose override with real Cognito config and start the app
+    instance.addUserData(`
+cd /opt/semantic-layer
+cat > docker-compose.override.yml << EOF
+services:
+${neo4jServiceOverride}  rosetta:
     restart: always
     environment:
       COGNITO_USER_POOL_ID: "${userPool.userPoolId}"
@@ -338,9 +373,9 @@ services:
       AWS_DEFAULT_REGION: "${cdk.Aws.REGION}"
       ATHENA_WORKGROUP: "${athenaWorkgroup.name}"
       ATHENA_OUTPUT_BUCKET: "s3://${athenaBucket.bucketName}/results/"
-EOF
+${rosettaNeo4jEnv}EOF
 
-/usr/local/bin/docker-compose up -d
+${composeUp}
 `);
 
     // ─────────────────────────────────────────────

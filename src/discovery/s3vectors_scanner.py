@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import boto3
-
+from src import aws_clients
 from src.catalog.models import ColumnMeta, DocumentMeta
 from src.config import VectorBucketConfig
 
@@ -17,7 +16,7 @@ _SAMPLE_SIZE = 10
 
 def discover_all_vector_buckets() -> list[DocumentMeta]:
     """Auto-discover ALL S3 Vector buckets and their indexes + metadata schema."""
-    client = boto3.client("s3vectors")
+    client = aws_clients.client("s3vectors")
     all_docs: list[DocumentMeta] = []
 
     logger.info("Auto-discovering all S3 Vector buckets...")
@@ -40,7 +39,7 @@ def discover_all_vector_buckets() -> list[DocumentMeta]:
 
 def scan_vector_buckets(buckets: list[VectorBucketConfig]) -> list[DocumentMeta]:
     """Scan configured S3 Vector buckets and return document metadata with schema."""
-    client = boto3.client("s3vectors")
+    client = aws_clients.client("s3vectors")
     all_docs: list[DocumentMeta] = []
 
     for bucket_config in buckets:

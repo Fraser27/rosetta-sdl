@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 
-import boto3
+from src import aws_clients
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def execute_query(
             "query_execution_id": str,
         }
     """
-    athena = boto3.client("athena")
+    athena = aws_clients.client("athena")
     start = time.time()
 
     # Build execution context

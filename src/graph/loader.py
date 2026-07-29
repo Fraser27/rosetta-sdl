@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -83,6 +84,7 @@ def load_metrics(
             "time_grains": m.time_grains,
             "source_table": m.source_table,
             "joins_json": "[]",
+            "parameters_json": json.dumps([p.model_dump() for p in m.parameters]) if m.parameters else "[]",
             "base_metrics": [],
             "source": "yaml",
         })

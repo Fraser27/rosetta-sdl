@@ -1,13 +1,18 @@
-.PHONY: dev up down scan enrich test-unit smoke-test
+.PHONY: dev up up-aura down scan enrich test-unit smoke-test
 
 dev:
 	uvicorn src.main:app --reload --port 8000
 
+# CE: start the local Neo4j container alongside the app
 up:
+	docker-compose --profile ce up -d
+
+# Aura: start the app only; connect to Aura via NEO4J_URI in .env
+up-aura:
 	docker-compose up -d
 
 down:
-	docker-compose down
+	docker-compose --profile ce down
 
 scan:
 	curl -s -X POST http://localhost:8000/admin/scan | python -m json.tool

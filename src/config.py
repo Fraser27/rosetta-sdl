@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from dotenv import load_dotenv
 
 
 @dataclass
@@ -61,10 +63,31 @@ class SemanticLayerConfig:
     metrics_file: str = ""
     allowed_tables: list[str] = field(default_factory=list)
     max_query_rows: int = 500
+    aws_region: str = ""
+
+
+def _load_neo4j_secret(secret_name: str, region: str | None) -> dict[str, str]:
+    """Fetch Neo4j credentials from AWS Secrets Manager.
+
+    Kept in its own function with a lazy import so the default config path
+    stays a pure env/file reader with no network calls or AWS dependency at
+    import time. Only invoked when NEO4J_SECRET_NAME is set (the deployed Aura
+    path), so the credentials are never written to disk on the instance. Runs
+    before the client factory is configured, so it takes the region explicitly.
+    """
+    import boto3
+
+    client = boto3.client("secretsmanager", region_name=region)
+    response = client.get_secret_value(SecretId=secret_name)
+    return json.loads(response["SecretString"])
 
 
 def load_config(config_path: str | None = None) -> SemanticLayerConfig:
     """Load config from YAML file, with env var overrides."""
+    # Populate os.environ from a local .env file (if present) before overrides
+    # run. Existing environment variables take precedence over .env values.
+    load_dotenv()
+
     cfg = SemanticLayerConfig()
 
     # Try loading YAML file
@@ -88,14 +111,27 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
         cfg.metrics_file = data.get("metrics_file", cfg.metrics_file)
         cfg.allowed_tables = data.get("allowed_tables", cfg.allowed_tables)
         cfg.max_query_rows = data.get("max_query_rows", cfg.max_query_rows)
+        cfg.aws_region = data.get("aws_region", cfg.aws_region)
 
     # Environment variable overrides
+    # Region is resolved first so the secret fetch below can use it. Prefer
+    # AWS_DEFAULT_REGION (what boto3 honors natively); fall back to AWS_REGION so
+    # a shell with only AWS_REGION set still resolves a region instead of none.
+    if v := os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION"):
+        cfg.aws_region = v
     if v := os.environ.get("NEO4J_URI"):
         cfg.neo4j.uri = v
     if v := os.environ.get("NEO4J_USER"):
         cfg.neo4j.user = v
     if v := os.environ.get("NEO4J_PASSWORD"):
         cfg.neo4j.password = v
+    # When pointed at a Secrets Manager secret, it is the source of truth for
+    # the Neo4j credentials and takes precedence over the individual env vars.
+    if secret_name := os.environ.get("NEO4J_SECRET_NAME"):
+        creds = _load_neo4j_secret(secret_name, cfg.aws_region or None)
+        cfg.neo4j.uri = creds["uri"]
+        cfg.neo4j.user = creds["user"]
+        cfg.neo4j.password = creds["password"]
     if v := os.environ.get("GLUE_DATABASES"):
         cfg.databases = [
             DatabaseConfig(name=db.strip(), glue_database=db.strip())
