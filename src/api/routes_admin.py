@@ -61,8 +61,10 @@ async def scan_and_load():
         metrics, joins = load_metrics_yaml(_config.metrics_file)
         summary["joins"] = len(joins)
 
-        # Load into graph
-        load_structured(graph, tables, joins)
+        # Glue-scanned tables are queried via Athena — tag them with the
+        # Athena executor datasource so metrics can filter tables by datasource.
+        from src.executors.registry import registry
+        load_structured(graph, tables, joins, datasource_id=registry.default_athena_id())
         load_metrics(graph, metrics, embedding_config=_config.embedding)
         summary["metrics"] = len(metrics)
 
@@ -174,6 +176,19 @@ async def load_sample_data():
         if clean:
             graph.write(clean)
             executed += 1
+
+    # Tag seeded tables with the default Athena executor datasource so the
+    # metric form can filter tables by datasource (sample data is Athena-backed).
+    from src.executors.registry import registry
+    default_ds = registry.default_athena_id()
+    if default_ds:
+        graph.write(
+            "MATCH (t:Table) WHERE t.datasource_id IS NULL OR t.datasource_id = '' "
+            "SET t.datasource_id = $ds "
+            "WITH t MATCH (eds:DataSource {datasource_id: $ds}) "
+            "MERGE (eds)-[:PROVIDES]->(t)",
+            {"ds": default_ds},
+        )
 
     # 2. Load sample metrics YAML
     metrics, joins = load_metrics_yaml("sample/metrics.yaml")

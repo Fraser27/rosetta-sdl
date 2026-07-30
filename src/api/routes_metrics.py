@@ -11,6 +11,7 @@ from src.catalog.models import MetricJoin, MetricParameter, MetricSummary
 from src.config import SemanticLayerConfig
 from src.graph import queries
 from src.graph.client import GraphClient
+from src.executors.registry import registry
 from src.metrics.compiler import FilterClause, compile_metric
 from src.query.athena_executor import execute_query
 from src.query.embeddings import build_metric_embedding_text, get_embedding
@@ -40,6 +41,22 @@ def _get_graph() -> GraphClient:
     return _graph
 
 
+def _resolve_executor_for_metric(metric_id: str, graph: GraphClient):
+    """Resolve the executor for a metric via its EXECUTES_ON relationship.
+
+    Falls back to the default Athena executor when the metric has no datasource
+    link. Returns None if no executor is registered (legacy Athena path used).
+    """
+    results = graph.query(
+        "MATCH (m:Metric {metric_id: $mid})-[:EXECUTES_ON]->(ds:DataSource) "
+        "RETURN ds.datasource_id AS datasource_id",
+        {"mid": metric_id},
+    )
+    if results and results[0].get("datasource_id"):
+        return registry.get(results[0]["datasource_id"])
+    return registry.get(registry.default_athena_id())
+
+
 class MetricCreateRequest(BaseModel):
     metric_id: str
     name: str
@@ -47,6 +64,7 @@ class MetricCreateRequest(BaseModel):
     expression: str
     type: str = "simple"
     source_table: str = ""
+    datasource_id: str = ""
     joins: list[MetricJoin] = Field(default_factory=list)
     base_metrics: list[str] = Field(default_factory=list)
     synonyms: list[str] = Field(default_factory=list)
@@ -141,13 +159,27 @@ async def query_metric(metric_id: str, request: MetricQueryRequest):
         if not fw_result.allowed:
             raise HTTPException(403, fw_result.reason)
 
-    # Execute via Athena
-    result = execute_query(
-        sql=compiled.sql,
-        workgroup=request.workgroup or _config.athena.workgroup,
-        output_location=_config.athena.output_bucket,
-        max_rows=request.limit or _config.max_query_rows,
-    )
+    # Execute on the metric's datasource engine (via EXECUTES_ON), falling back
+    # to the legacy Athena executor when the metric has no datasource link.
+    max_rows = request.limit or _config.max_query_rows
+    executor = _resolve_executor_for_metric(metric_id, graph)
+    if executor:
+        exec_result = await executor.execute(compiled.sql, max_rows=max_rows)
+        result = {
+            "columns": exec_result.columns,
+            "rows": exec_result.rows,
+            "row_count": exec_result.row_count,
+            "duration_ms": exec_result.duration_ms,
+            "query_execution_id": exec_result.query_execution_id,
+            "error": exec_result.error,
+        }
+    else:
+        result = execute_query(
+            sql=compiled.sql,
+            workgroup=request.workgroup or _config.athena.workgroup,
+            output_location=_config.athena.output_bucket,
+            max_rows=max_rows,
+        )
 
     return {
         "metric": compiled.metric_name,
@@ -211,6 +243,15 @@ def _save_metric(graph: GraphClient, metric_id: str, req: MetricCreateRequest) -
         "base_metrics": req.base_metrics,
         "source": req.source,
     })
+    # Manage EXECUTES_ON relationship (which datasource engine runs this metric).
+    # No link = falls back to default Athena at query time.
+    graph.write(queries.UNLINK_METRIC_FROM_DATASOURCE, {"metric_id": metric_id})
+    if req.datasource_id:
+        graph.write(queries.LINK_METRIC_TO_DATASOURCE, {
+            "metric_id": metric_id,
+            "datasource_id": req.datasource_id,
+        })
+
     # Manage DERIVES_FROM relationships for derived metrics
     graph.write(queries.CLEAR_DERIVED_LINKS, {"metric_id": metric_id})
     if req.type == "derived" and req.base_metrics:

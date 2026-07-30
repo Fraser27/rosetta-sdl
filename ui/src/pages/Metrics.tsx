@@ -123,19 +123,27 @@ export default function Metrics() {
 
   useEffect(() => { load() }, [])
 
-  // Derived data
+  // Tables scoped to the selected datasource. When no datasource is chosen,
+  // fall back to the default Athena datasource (ds_default_athena or the sole
+  // athena source) so the picker isn't empty; if still ambiguous, show all.
+  const scopedTables = useMemo(() => {
+    const dsId = form.datasource_id
+    if (dsId) return tables.filter((t) => t.datasource_id === dsId)
+    return tables.filter((t) => !t.datasource_id || t.datasource_id === 'ds_default_athena')
+  }, [tables, form.datasource_id])
+
   const databases = useMemo(() =>
-    [...new Set(tables.map((t) => t.database))].sort(),
-    [tables],
+    [...new Set(scopedTables.map((t) => t.database))].sort(),
+    [scopedTables],
   )
 
   const tablesByDb = useMemo(() => {
     const map: Record<string, TableSummary[]> = {}
-    for (const t of tables) {
+    for (const t of scopedTables) {
       ;(map[t.database] ||= []).push(t)
     }
     return map
-  }, [tables])
+  }, [scopedTables])
 
   // Fetch columns for a table (cached)
   const fetchColumns = async (fullName: string) => {
@@ -259,6 +267,12 @@ export default function Metrics() {
     setPreviewSql(null)
   }
 
+  // Changing datasource invalidates any selected db/table/joins from another source.
+  const setDatasource = (dsId: string) => {
+    setForm((f) => ({ ...f, datasource_id: dsId, source_db: '', source_table: '', joins: [] }))
+    setPreviewSql(null)
+  }
+
   const setSourceTable = (fullName: string) => {
     setForm((f) => ({ ...f, source_table: fullName }))
     setPreviewSql(null)
@@ -356,7 +370,7 @@ export default function Metrics() {
   }, [metrics, metricFilter])
 
   const isDerived = form.type === 'derived'
-  const filteredTables = form.source_db ? (tablesByDb[form.source_db] || []) : tables
+  const filteredTables = form.source_db ? (tablesByDb[form.source_db] || []) : scopedTables
 
   if (loading) return <div className="loading"><div className="spinner" /></div>
 
@@ -538,6 +552,19 @@ export default function Metrics() {
             ) : (
               <>
                 <div className="form-group">
+                  <label>Datasource</label>
+                  <select value={form.datasource_id} onChange={(e) => setDatasource(e.target.value)}>
+                    <option value="">-- Default (Athena) --</option>
+                    {datasources.map((ds) => (
+                      <option key={ds.datasource_id} value={ds.datasource_id}>{ds.name} ({ds.type})</option>
+                    ))}
+                  </select>
+                  <p style={{ fontSize: 11, color: 'var(--text-dim)', margin: '4px 0' }}>
+                    The engine this metric runs on. Database & table choices below are scoped to it.
+                  </p>
+                </div>
+
+                <div className="form-group">
                   <label>SQL Expression</label>
                   <input value={form.expression} onChange={(e) => updateField('expression', e.target.value)}
                     placeholder="e.g. SUM(o.total_amount)" />
@@ -563,16 +590,6 @@ export default function Metrics() {
                       ))}
                     </select>
                   </div>
-                </div>
-
-                <div className="form-group">
-                  <label>Datasource</label>
-                  <select value={form.datasource_id} onChange={(e) => updateField('datasource_id', e.target.value)}>
-                    <option value="">-- Default (Athena) --</option>
-                    {datasources.map((ds) => (
-                      <option key={ds.datasource_id} value={ds.datasource_id}>{ds.name} ({ds.type})</option>
-                    ))}
-                  </select>
                 </div>
 
                 <div className="form-group">

@@ -84,6 +84,7 @@ class TableSummary(BaseModel):
     description: str = ""
     catalog_type: str = ""
     datasource: str = ""
+    datasource_id: str = ""
 
 
 class MetricSummary(BaseModel):
@@ -93,6 +94,7 @@ class MetricSummary(BaseModel):
     expression: str = ""
     type: str = "simple"
     source_table: str = ""
+    datasource_id: str = ""
     joins: list[MetricJoin] = Field(default_factory=list)
     base_metrics: list[str] | None = Field(default_factory=list)
     synonyms: list[str] | None = Field(default_factory=list)

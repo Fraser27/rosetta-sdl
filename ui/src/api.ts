@@ -85,6 +85,7 @@ export interface Metric {
   expression: string;
   type: string;
   source_table: string;
+  datasource_id?: string;
   joins: MetricJoin[];
   base_metrics: string[] | null;
   synonyms: string[] | null;

@@ -64,10 +64,16 @@ DELETE r
 MERGE_TABLE = """
 MERGE (t:Table {full_name: $full_name})
 SET t.name = $name, t.database = $database, t.description = $description,
-    t.catalog_type = $catalog_type, t.row_count_approx = $row_count_approx
+    t.catalog_type = $catalog_type, t.row_count_approx = $row_count_approx,
+    t.datasource_id = $datasource_id
 WITH t
 MATCH (ds:DataSource {name: $database})
 MERGE (ds)-[:CONTAINS]->(t)
+WITH t
+OPTIONAL MATCH (eds:DataSource {datasource_id: $datasource_id})
+FOREACH (_ IN CASE WHEN eds IS NOT NULL THEN [1] ELSE [] END |
+    MERGE (eds)-[:PROVIDES]->(t)
+)
 """
 
 MERGE_COLUMN = """
@@ -189,7 +195,8 @@ MATCH (t:Table)
 OPTIONAL MATCH (t)<-[:CONTAINS]-(ds:DataSource)
 RETURN t.full_name AS full_name, t.name AS name, t.database AS database,
        t.description AS description, t.catalog_type AS catalog_type,
-       COALESCE(ds.name, '') AS datasource
+       COALESCE(ds.name, '') AS datasource,
+       COALESCE(t.datasource_id, '') AS datasource_id
 ORDER BY t.full_name
 """
 
@@ -220,18 +227,21 @@ RETURN [n IN nodes(path) | n.full_name] AS tables,
 LIST_METRICS = """
 MATCH (m:Metric)
 OPTIONAL MATCH (m)-[:MEASURES]->(t:Table)
+OPTIONAL MATCH (m)-[:EXECUTES_ON]->(ds:DataSource)
 RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
        m.grain AS grain, m.time_grains AS time_grains, m.filters AS filters,
        COALESCE(t.full_name, m.source_table, '') AS source_table,
        m.joins_json AS joins_json, m.parameters_json AS parameters_json,
-       m.base_metrics AS base_metrics, COALESCE(m.source, 'user') AS source
+       m.base_metrics AS base_metrics, COALESCE(m.source, 'user') AS source,
+       COALESCE(ds.datasource_id, '') AS datasource_id
 ORDER BY m.name
 """
 
 GET_METRIC = """
 MATCH (m:Metric {metric_id: $metric_id})
 OPTIONAL MATCH (m)-[:MEASURES]->(t:Table)
+OPTIONAL MATCH (m)-[:EXECUTES_ON]->(ds:DataSource)
 OPTIONAL MATCH (m)-[:USES_COLUMN]->(c:Column)
 RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        m.expression AS expression, m.type AS type, m.synonyms AS synonyms,
@@ -239,6 +249,7 @@ RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition,
        COALESCE(m.source_table, '') AS source_table, m.joins_json AS joins_json,
        m.parameters_json AS parameters_json, m.base_metrics AS base_metrics,
        COALESCE(m.source, 'user') AS source,
+       COALESCE(ds.datasource_id, '') AS datasource_id,
        t.full_name AS table_name,
        collect(c.name) AS used_columns
 """

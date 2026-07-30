@@ -36,6 +36,19 @@ class ExecutorRegistry:
         """Iterate over (datasource_id, executor) pairs."""
         return self._executors.items()
 
+    def default_athena_id(self) -> str:
+        """Return the datasource_id of the Athena executor that owns Glue-scanned tables.
+
+        Prefers the conventional 'ds_default_athena', else the first registered
+        athena executor, else '' when none exists.
+        """
+        if "ds_default_athena" in self._executors:
+            return "ds_default_athena"
+        for ds_id, ex in self._executors.items():
+            if getattr(ex, "datasource_type", "") == "athena":
+                return ds_id
+        return ""
+
     def __contains__(self, datasource_id: str) -> bool:
         return datasource_id in self._executors
 

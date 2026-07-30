@@ -15,8 +15,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def load_structured(graph: GraphClient, tables: list[TableMeta], joins: list[JoinPath]) -> int:
-    """Load tables, columns, and join paths into the graph. Returns node count."""
+def load_structured(
+    graph: GraphClient,
+    tables: list[TableMeta],
+    joins: list[JoinPath],
+    datasource_id: str = "",
+) -> int:
+    """Load tables, columns, and join paths into the graph. Returns node count.
+
+    datasource_id links each table to its executor datasource (the engine that
+    runs queries against it) via a PROVIDES edge, enabling datasource-scoped
+    table filtering. Defaults to empty (no executor link) when unknown.
+    """
     count = 0
 
     for table in tables:
@@ -35,6 +45,7 @@ def load_structured(graph: GraphClient, tables: list[TableMeta], joins: list[Joi
             "description": table.description,
             "catalog_type": table.catalog_type,
             "row_count_approx": table.row_count_approx,
+            "datasource_id": datasource_id,
         })
         count += 1
 
@@ -69,7 +80,11 @@ def load_metrics(
     embedding_config: EmbeddingConfig | None = None,
 ) -> int:
     """Load metric definitions into the graph. Returns count."""
+    import json
+
     for m in metrics:
+        joins_json = json.dumps([j.model_dump() for j in m.joins]) if m.joins else "[]"
+        parameters_json = json.dumps([p.model_dump() for p in m.parameters]) if m.parameters else "[]"
         graph.write(queries.MERGE_METRIC, {
             "metric_id": m.metric_id,
             "name": m.name,
@@ -82,8 +97,9 @@ def load_metrics(
             "synonyms_text": " ".join(m.synonyms),
             "time_grains": m.time_grains,
             "source_table": m.source_table,
-            "joins_json": "[]",
-            "base_metrics": [],
+            "joins_json": joins_json,
+            "parameters_json": parameters_json,
+            "base_metrics": m.base_metrics,
             "source": "yaml",
         })
 
