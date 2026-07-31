@@ -322,7 +322,11 @@ async def get_config():
 
 @router.get("/config/query-model")
 async def get_query_model():
-    """Return the current ungoverned-query LLM model and the selectable options."""
+    """Return the current ungoverned-query LLM model plus suggested options.
+
+    `query_model` is free-text (any Converse-capable Bedrock modelId); `available`
+    is a non-exhaustive suggestion list for the UI, not an allowlist.
+    """
     return {
         "query_model": _config.bedrock.query_model,
         "available": AVAILABLE_QUERY_MODELS,
@@ -337,16 +341,14 @@ class QueryModelUpdate(BaseModel):
 async def set_query_model(req: QueryModelUpdate):
     """Set the LLM model used for ungoverned (LLM-generated) SQL.
 
-    Persists to Neo4j (survives restart) and mutates the shared in-memory config
-    so it takes effect immediately for subsequent queries.
+    Free-text Bedrock modelId (invoked via Converse, so any provider works — the
+    account just needs access to it). Persisted to Neo4j and applied in-memory
+    immediately (config is shared by reference across routers).
     """
     model_id = req.query_model.strip()
-    allowed_ids = {m["id"] for m in AVAILABLE_QUERY_MODELS}
-    if model_id not in allowed_ids:
-        raise HTTPException(400, f"Unknown model '{model_id}'. Choose one of the available models.")
+    if not model_id:
+        raise HTTPException(400, "query_model must not be empty")
 
-    # Persist (Neo4j) then apply in-memory. _config is shared by reference across
-    # routers, so routes_query sees the new value on the next request.
     _get_graph().write(queries.UPSERT_SYSTEM_CONFIG, {
         "key": SYSTEM_CONFIG_KEY,
         "query_model": model_id,
