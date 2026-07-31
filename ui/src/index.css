@@ -422,6 +422,64 @@ a:hover { text-decoration: underline; }
 
 .form-hint { font-weight: 400; font-size: 11px; color: var(--text-dim); margin-left: 6px; }
 
+/* FieldHelp — (?) info icon with hover/focus tooltip */
+.field-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  cursor: help;
+  outline: none;
+  vertical-align: middle;
+}
+.field-help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+.field-help:hover .field-help-icon,
+.field-help:focus .field-help-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.field-help-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  width: max-content;
+  max-width: 260px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+.field-help:hover .field-help-tip,
+.field-help:focus .field-help-tip {
+  opacity: 1;
+  visibility: visible;
+}
+
 /* Datasources page */
 .ds-grid {
   display: grid;

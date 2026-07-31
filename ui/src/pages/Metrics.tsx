@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource } from '../api'
+import FieldHelp from '../components/FieldHelp'
 
 interface JoinRow {
   table: string
@@ -530,7 +531,7 @@ export default function Metrics() {
 
             <div className="form-row">
               <div className="form-group">
-                <label>Metric ID</label>
+                <label>Metric ID <FieldHelp text="Stable unique identifier for this metric, e.g. m_007. Cannot be changed after creation; used to reference the metric in queries and derived metrics." /></label>
                 <input value={form.metric_id} onChange={(e) => updateField('metric_id', e.target.value)}
                   placeholder="e.g. m_007" disabled={!!editing} />
               </div>
@@ -620,7 +621,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>SQL Expression</label>
+                  <label>SQL Expression <FieldHelp text="The SQL aggregate that computes the metric, e.g. SUM(o.total_amount) or COUNT(DISTINCT customer_id). Reference the source table and any joined tables by alias." /></label>
                   <input value={form.expression} onChange={(e) => updateField('expression', e.target.value)}
                     placeholder="e.g. SUM(o.total_amount)" />
                 </div>
@@ -704,7 +705,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Grain (comma-separated)</label>
+                  <label>Grain (comma-separated) <FieldHelp text="The dimension columns this metric is grouped by (GROUP BY), e.g. order_date, region. Defines the level of detail the metric is reported at." /></label>
                   <input value={form.grain} onChange={(e) => updateField('grain', e.target.value)}
                     placeholder="e.g. order_date, c.customer_name" />
                 </div>
@@ -731,7 +732,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Value type</label>
+                  <label>Value type <FieldHelp text="What the metric's number represents, used for formatting and sanity checks: number, currency, percent, ratio, count, or duration." /></label>
                   <select value={form.value_type} onChange={(e) => updateField('value_type', e.target.value)}>
                     <option value="number">Number</option>
                     <option value="currency">Currency</option>
@@ -744,12 +745,12 @@ export default function Metrics() {
 
                 <div className="form-row" style={{ display: 'flex', gap: 12 }}>
                   <div className="form-group" style={{ flex: 1 }}>
-                    <label>Unit (optional)</label>
+                    <label>Unit (optional) <FieldHelp text="Free-form unit label shown with the value, e.g. USD, orders, ms. Display only — doesn't affect the SQL." /></label>
                     <input value={form.unit} onChange={(e) => updateField('unit', e.target.value)}
                       placeholder="e.g. USD, orders, ms" />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
-                    <label>Display format (optional)</label>
+                    <label>Display format (optional) <FieldHelp text="Optional number-format pattern hint for consumers, e.g. $#,##0.00 for currency or 0.0% for percent. Display only." /></label>
                     <input value={form.format} onChange={(e) => updateField('format', e.target.value)}
                       placeholder="e.g. $#,##0.00, 0.0%" />
                   </div>
@@ -799,13 +800,13 @@ export default function Metrics() {
             )}
 
             <div className="form-group">
-              <label>Synonyms (comma-separated)</label>
+              <label>Synonyms (comma-separated) <FieldHelp text="Alternate phrasings that should match this metric during search/routing, e.g. total sales, revenue, gross revenue. Improves natural-language matching." /></label>
               <input value={form.synonyms} onChange={(e) => updateField('synonyms', e.target.value)}
                 placeholder="e.g. total sales, revenue, gross revenue" />
             </div>
 
             <div className="form-group">
-              <label>Filters (one per line)</label>
+              <label>Filters (one per line) <FieldHelp text="SQL boolean predicates always applied to this metric (WHERE clause), one per line, e.g. status != 'cancelled'. Must be safe expressions — no subqueries or comments." /></label>
               <textarea value={form.filters} onChange={(e) => updateField('filters', e.target.value)}
                 placeholder={"e.g. status != 'cancelled'"} />
             </div>

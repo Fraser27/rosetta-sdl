@@ -210,10 +210,10 @@ export default function TableDetail() {
                   {c.is_deprecated ? (
                     <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                       <span className="tag tag-red">deprecated</span>
-                      <button className="btn btn-ghost btn-sm" onClick={() => handleToggleDeprecation(c.name, false)}>Restore</button>
+                      <button className="btn btn-ghost btn-sm" title="Restore this column — it becomes selectable again and its description is shown to the query generator." onClick={() => handleToggleDeprecation(c.name, false)}>Restore</button>
                     </span>
                   ) : (
-                    <button className="btn btn-ghost btn-sm" onClick={() => handleToggleDeprecation(c.name, true)}>Deprecate</button>
+                    <button className="btn btn-ghost btn-sm" title="Mark this column deprecated. It's flagged in the UI and the LLM SQL generator is steered away from using it." onClick={() => handleToggleDeprecation(c.name, true)}>Deprecate</button>
                   )}
                 </td>
               </tr>

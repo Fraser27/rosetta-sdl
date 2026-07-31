@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, type GraphNode, type GraphEdge } from '../api'
+import FieldHelp from '../components/FieldHelp'
 
 const NODE_COLORS: Record<string, string> = {
   Table: '#6c8cff',
@@ -585,7 +586,7 @@ export default function GraphExplorer() {
       <div className="graph-toolbar">
         <div className="graph-toolbar-left">
           <div className="graph-filter-group">
-            <label className="graph-filter-label">Metric</label>
+            <label className="graph-filter-label">Metric <FieldHelp text="Focus the graph on one metric and the tables/columns it measures. 'All Metrics' shows everything." /></label>
             <select
               className="graph-filter-select"
               value={selectedMetric}
@@ -599,7 +600,7 @@ export default function GraphExplorer() {
           </div>
 
           <div className="graph-filter-group">
-            <label className="graph-filter-label">DataSource</label>
+            <label className="graph-filter-label">DataSource <FieldHelp text="Filter the graph to tables and metrics served by a specific datasource (query engine)." /></label>
             <select
               className="graph-filter-select"
               value={selectedDatasource}
@@ -614,7 +615,7 @@ export default function GraphExplorer() {
           </div>
 
           <div className="graph-filter-group">
-            <label className="graph-filter-label">Table</label>
+            <label className="graph-filter-label">Table <FieldHelp text="Center the graph on one table — its columns, joins, and the metrics that measure it." /></label>
             <select
               className="graph-filter-select"
               value={selectedTable}
