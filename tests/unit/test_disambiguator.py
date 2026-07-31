@@ -86,3 +86,18 @@ class TestDisambiguator:
         assert result.tables == []
         assert result.metrics == []
         assert result.confidence == 0.0
+
+    def test_metric_search_gated_to_approved(self):
+        """NL routing must only surface approved metrics (governance gate)."""
+        captured = []
+        graph = MagicMock()
+
+        def mock_query(cypher, params=None):
+            if "metric_search" in cypher:
+                captured.append(cypher)
+            return []
+
+        graph.query.side_effect = mock_query
+        disambiguate("total revenue", graph)
+        assert captured, "metric_search query was not issued"
+        assert "COALESCE(node.status, 'approved') = 'approved'" in captured[0]

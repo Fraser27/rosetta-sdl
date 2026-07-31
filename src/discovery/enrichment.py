@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 
 import boto3
 
+from src.constants import BEDROCK_ANTHROPIC_VERSION
 from src.graph import queries
+from src.text_utils import extract_json, retry_bedrock, truncate_words
 from src.graph.client import GraphClient
 
 logger = logging.getLogger(__name__)
@@ -89,26 +91,22 @@ def list_jobs() -> list[dict]:
 # ── Enrichment logic ─────────────────────────────────────────
 
 def _parse_llm_json(text: str) -> dict:
-    """Extract JSON from LLM response, handling markdown code blocks."""
-    if "```json" in text:
-        text = text.split("```json")[1].split("```")[0]
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0]
-    return json.loads(text.strip())
+    """Extract JSON from an LLM response, tolerating fences and surrounding prose."""
+    return extract_json(text)
 
 
 def _call_bedrock(bedrock, model_id: str, prompt: str, max_tokens: int = 1024) -> dict:
-    """Call Bedrock and return parsed JSON."""
-    response = bedrock.invoke_model(
+    """Call Bedrock (with retry on throttling) and return parsed JSON."""
+    response = retry_bedrock(lambda: bedrock.invoke_model(
         modelId=model_id,
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
+            "anthropic_version": BEDROCK_ANTHROPIC_VERSION,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }),
-    )
+    ))
     result = json.loads(response["body"].read())
     text = result["content"][0]["text"]
     return _parse_llm_json(text)
@@ -169,11 +167,11 @@ def _enrich_single_table(
     try:
         data = _call_bedrock(bedrock, model_id, prompt)
 
-        # Update table description
+        # Update table description (LLM output is truncated, not rejected).
         if table_needs_desc and data.get("table_description"):
             graph.write(
                 "MATCH (t:Table {full_name: $fn}) SET t.description = $desc",
-                {"fn": full_name, "desc": data["table_description"]},
+                {"fn": full_name, "desc": truncate_words(data["table_description"])},
             )
 
         # Update column descriptions (only those we asked for)
@@ -181,7 +179,7 @@ def _enrich_single_table(
             if col_name in cols_needing_desc:
                 graph.write(
                     "MATCH (c:Column {name: $name, table: $table}) SET c.description = $desc",
-                    {"name": col_name, "table": full_name, "desc": col_desc},
+                    {"name": col_name, "table": full_name, "desc": truncate_words(col_desc)},
                 )
 
         # Create business term nodes

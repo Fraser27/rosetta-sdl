@@ -1,7 +1,7 @@
 neo4j:
   uri: "bolt://localhost:7687"
   user: "neo4j"
-  password: "semantic-layer"
+  password: ""  # set via NEO4J_PASSWORD env var (do not hardcode a real credential)
 
 databases:
   - name: "ecommerce"

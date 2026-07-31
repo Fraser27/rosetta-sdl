@@ -44,6 +44,7 @@ export interface TableSummary {
   description: string;
   catalog_type: string;
   datasource: string;
+  datasource_id: string;
 }
 
 export interface Column {
@@ -52,6 +53,7 @@ export interface Column {
   description: string;
   is_partition: boolean;
   is_primary_key: boolean;
+  is_deprecated: boolean;
 }
 
 export interface TableDetail {
@@ -85,6 +87,7 @@ export interface Metric {
   expression: string;
   type: string;
   source_table: string;
+  datasource_id?: string;
   joins: MetricJoin[];
   base_metrics: string[] | null;
   synonyms: string[] | null;
@@ -92,6 +95,14 @@ export interface Metric {
   parameters?: MetricParameter[];
   filters?: string[];
   time_grains?: string[];
+  aggregation?: string;
+  value_type?: string;
+  unit?: string;
+  format?: string;
+  status?: string;
+  version?: number;
+  updated_by?: string;
+  updated_at?: string;
   owner?: string;
   source?: string;
 }
@@ -139,12 +150,29 @@ export const api = {
     request<{ ok: boolean }>(`/catalog/tables/${tableName}/columns/${columnName}/description`, {
       method: 'PATCH', body: JSON.stringify({ description }),
     }),
+  updateColumnDeprecation: (tableName: string, columnName: string, is_deprecated: boolean) =>
+    request<{ ok: boolean }>(`/catalog/tables/${tableName}/columns/${columnName}/deprecation`, {
+      method: 'PATCH', body: JSON.stringify({ is_deprecated }),
+    }),
+  setDatasourceEnabled: (datasourceId: string, enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean; metrics_affected: number }>(
+      `/datasources/${datasourceId}/enabled`, {
+        method: 'PATCH', body: JSON.stringify({ enabled }),
+      }),
   listDocuments: () => request<DocumentSummary[]>('/catalog/documents'),
   getDocument: (key: string) => request<DocumentDetail>(`/catalog/documents/${key}`),
   updateDocumentDescription: (key: string, description: string) =>
     request<{ ok: boolean }>(`/catalog/documents/${key}/description`, {
       method: 'PATCH', body: JSON.stringify({ description }),
     }),
+  uploadDocumentMetadata: async (key: string, file: File): Promise<{ ok: boolean; words: number }> => {
+    const form = new FormData()
+    form.append('file', file)
+    // Multipart upload — don't set Content-Type; the browser adds the boundary.
+    const res = await fetch(`/api/catalog/documents/${key}/metadata-file`, { method: 'POST', body: form })
+    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
+    return res.json()
+  },
   search: (q: string) => request<SearchResult[]>(`/catalog/search?q=${encodeURIComponent(q)}`),
   graphSummary: () => request<GraphSummary>('/catalog/graph'),
 
@@ -157,6 +185,9 @@ export const api = {
     request<Metric>(`/metrics/${id}`, { method: 'PUT', body: JSON.stringify(m) }),
   deleteMetric: (id: string) =>
     request<{ ok: boolean }>(`/metrics/${id}`, { method: 'DELETE' }),
+  setMetricStatus: (id: string, status: string) =>
+    request<{ ok: boolean; metric_id: string; status: string; version: number }>(
+      `/metrics/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
   compileMetric: (id: string) =>
     request<{ metric: string; sql: string; source_table: string }>(`/metrics/${id}/compile`, { method: 'POST' }),
   composeMetrics: (metric_ids: string[], dimensions: string[], limit?: number) =>
@@ -186,6 +217,16 @@ export const api = {
   enrichStatus: (jobId: string) => request<EnrichmentJob>(`/admin/enrich/${jobId}`),
   listDatasources: () => request<{ name: string; table_count: number }[]>('/admin/datasources'),
   getConfig: () => request<Record<string, string>>('/admin/config'),
+  getQueryModel: () => request<{ query_model: string; available: { id: string; label: string }[] }>('/admin/config/query-model'),
+  setQueryModel: (query_model: string) =>
+    request<{ ok: boolean; query_model: string }>('/admin/config/query-model', {
+      method: 'PUT', body: JSON.stringify({ query_model }),
+    }),
+  getS3VectorsModel: () => request<{ s3vectors_model: string; available: { id: string; label: string }[] }>('/admin/config/s3vectors-model'),
+  setS3VectorsModel: (s3vectors_model: string) =>
+    request<{ ok: boolean; s3vectors_model: string }>('/admin/config/s3vectors-model', {
+      method: 'PUT', body: JSON.stringify({ s3vectors_model }),
+    }),
   sampleDataStatus: () => request<{ loaded: boolean; datasources: number; metrics: number }>('/admin/sample-data/status'),
   loadSampleData: () => request<Record<string, unknown>>('/admin/sample-data/load', { method: 'POST' }),
   deleteSampleData: () => request<Record<string, unknown>>('/admin/sample-data', { method: 'DELETE' }),
@@ -195,6 +236,21 @@ export const api = {
 
   // Graph data for visualization
   graphData: () => request<{ nodes: GraphNode[]; edges: GraphEdge[] }>('/catalog/graph/data'),
+
+  // Datasources
+  listDatasourcesFull: () => request<DataSource[]>('/datasources'),
+  getDatasource: (id: string) => request<DataSource>(`/datasources/${id}`),
+  createDatasource: (ds: DataSourceRequest) =>
+    request<DataSource>('/datasources', { method: 'POST', body: JSON.stringify(ds) }),
+  updateDatasource: (id: string, ds: DataSourceRequest) =>
+    request<{ ok: boolean }>(`/datasources/${id}`, { method: 'PUT', body: JSON.stringify(ds) }),
+  deleteDatasource: (id: string) =>
+    request<{ ok: boolean }>(`/datasources/${id}`, { method: 'DELETE' }),
+  datasourceMetrics: (id: string) => request<{ metric_id: string; name: string; enabled: boolean }[]>(`/datasources/${id}/metrics`),
+  testDatasource: (id: string) =>
+    request<{ job_id: string }>(`/datasources/${id}/test`, { method: 'POST' }),
+  pollTestConnection: (dsId: string, jobId: string) =>
+    request<TestConnectionJob>(`/datasources/${dsId}/test/${jobId}`),
 };
 
 export interface EnrichmentJob {
@@ -250,4 +306,45 @@ export interface GraphEdge {
   source: string;
   target: string;
   type: string;
+}
+
+export interface DataSource {
+  datasource_id: string;
+  name: string;
+  type: string;
+  endpoint: string;
+  database: string;
+  region: string;
+  status: string;
+  enabled: boolean;
+  metric_count: number;
+  last_health_check: string | null;
+  created_at: string | null;
+}
+
+export interface DataSourceRequest {
+  name: string;
+  type: string;
+  endpoint: string;
+  database: string;
+  region: string;
+  secret_arn?: string | null;
+  output_location?: string | null;
+}
+
+export interface TestConnectionStep {
+  name: string;
+  status: string;
+  duration_ms: number | null;
+  error: string | null;
+}
+
+export interface TestConnectionJob {
+  job_id: string;
+  datasource_id: string;
+  status: string;
+  steps: TestConnectionStep[];
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
 }

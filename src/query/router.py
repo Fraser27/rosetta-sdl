@@ -90,7 +90,7 @@ def _search_all_indexes(
     try:
         metric_hits = graph.query(
             "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-            "WHERE score > $min "
+            "WHERE score > $min AND COALESCE(node.status, 'approved') = 'approved' "
             "RETURN 'metric' AS type, node.metric_id AS id, node.name AS name, "
             "node.definition AS description, score "
             "ORDER BY score DESC LIMIT 10",
@@ -144,5 +144,41 @@ def _search_all_indexes(
         all_hits.extend(doc_hits)
     except Exception as e:
         logger.debug("Document search failed: %s", e)
+
+    # Vector fallback for documents: mirror the metric fallback. When full-text
+    # document matching is weak, embed the question and kNN against uploaded
+    # metadata embeddings so semantically-related docs still route to vectors.
+    if embedding_config and embedding_config.enabled:
+        best_doc_score = max(
+            (h["score"] for h in all_hits if h.get("type") == "document"), default=0
+        )
+        if best_doc_score < embedding_config.fulltext_confidence_threshold:
+            try:
+                from src.graph import queries as q
+                from src.query.embeddings import get_embedding
+
+                question_vec = get_embedding(
+                    question,
+                    embedding_config.s3vectors_model_id,
+                )
+                if question_vec:
+                    doc_vector_hits = graph.query(
+                        q.VECTOR_SEARCH_DOCUMENTS_SIMPLE,
+                        {
+                            "top_k": 5,
+                            "vec": question_vec,
+                            "min_score": embedding_config.vector_min_score,
+                            "limit": 5,
+                        },
+                    )
+                    if doc_vector_hits:
+                        logger.info(
+                            "Router vector fallback found %d document(s)", len(doc_vector_hits)
+                        )
+                        # De-dupe against full-text doc hits already present.
+                        seen = {h["id"] for h in all_hits if h.get("type") == "document"}
+                        all_hits.extend(h for h in doc_vector_hits if h["id"] not in seen)
+            except Exception as e:
+                logger.debug("Router document vector fallback failed: %s", e)
 
     return sorted(all_hits, key=lambda h: h.get("score", 0), reverse=True)

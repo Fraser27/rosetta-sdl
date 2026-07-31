@@ -15,6 +15,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT document_unique IF NOT EXISTS FOR (d:Document) REQUIRE d.s3_key IS UNIQUE",
     "CREATE CONSTRAINT business_term_unique IF NOT EXISTS FOR (bt:BusinessTerm) REQUIRE bt.name IS UNIQUE",
     "CREATE CONSTRAINT datasource_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.name IS UNIQUE",
+    "CREATE CONSTRAINT datasource_id_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.datasource_id IS UNIQUE",
     "CREATE CONSTRAINT concept_unique IF NOT EXISTS FOR (c:Concept) REQUIRE c.name IS UNIQUE",
 ]
 
@@ -53,6 +54,18 @@ VECTOR_INDEXES = [
         "metric_embedding",
         "CREATE VECTOR INDEX metric_embedding IF NOT EXISTS "
         "FOR (m:Metric) ON (m.embedding) "
+        "OPTIONS {indexConfig: {"
+        "`vector.dimensions`: 1024, "
+        "`vector.similarity_function`: 'cosine'"
+        "}}",
+    ),
+    (
+        # Embeddings of uploaded document metadata (txt/md). Fixed at 1024 dims
+        # (Titan v2). Switching to a different-dimension embedding model requires
+        # dropping + recreating this index and re-uploading metadata.
+        "document_embedding",
+        "CREATE VECTOR INDEX document_embedding IF NOT EXISTS "
+        "FOR (d:Document) ON (d.metadata_embedding) "
         "OPTIONS {indexConfig: {"
         "`vector.dimensions`: 1024, "
         "`vector.similarity_function`: 'cosine'"

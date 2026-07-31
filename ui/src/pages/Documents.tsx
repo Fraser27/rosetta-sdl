@@ -54,6 +54,22 @@ export default function Documents() {
     }
   }
 
+  const [uploading, setUploading] = useState(false)
+  const handleMetadataUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''  // reset so the same file can be re-picked
+    if (!file || !selected) return
+    setUploading(true)
+    try {
+      const res = await api.uploadDocumentMetadata(selected.s3_key, file)
+      showToast(`Metadata uploaded (${res.words} words vectorized)`)
+    } catch (err: unknown) {
+      showToast((err as Error).message.replace(/^\d+:\s*/, ''), 'error')
+    } finally {
+      setUploading(false)
+    }
+  }
+
   if (loading) return <div className="loading"><div className="spinner" /></div>
 
   return (
@@ -161,6 +177,24 @@ export default function Documents() {
                       {selected.description || 'Click to add description...'}
                     </p>
                   )}
+                </div>
+
+                <div className="form-group">
+                  <label>Metadata file (semantic routing)</label>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '2px 0 6px' }}>
+                    Upload a .txt or .md file describing this document. It's vectorized (capped at 1000 words)
+                    so questions semantically match this index — not just by keyword.
+                  </p>
+                  <label className="btn btn-ghost btn-sm" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                    {uploading ? 'Uploading…' : 'Upload .txt / .md'}
+                    <input
+                      type="file"
+                      accept=".txt,.md,text/plain,text/markdown"
+                      onChange={handleMetadataUpload}
+                      disabled={uploading}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
                 </div>
 
                 {/* Related Tables */}

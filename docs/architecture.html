@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rosetta SDL — Architecture & Query Routing</title>
+<style>
+  :root {
+    --bg:#0f1117; --card:#1a1d27; --border:#2d3148; --text:#e1e4ed; --dim:#8b90a5;
+    --accent:#6c8cff; --green:#4ade80; --red:#f87171; --orange:#fbbf24; --purple:#a78bfa; --cyan:#38bdf8;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif; line-height:1.55; }
+  .wrap { max-width:1080px; margin:0 auto; padding:40px 24px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:40px 0 12px; border-bottom:1px solid var(--border); padding-bottom:8px; }
+  h3 { font-size:15px; color:var(--accent); margin:24px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
+  p, li { color:var(--text); }
+  .sub { color:var(--dim); font-size:14px; margin-top:0; }
+  code { background:#242836; padding:1px 6px; border-radius:4px; font-size:13px; color:var(--cyan); }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px 20px; margin:14px 0; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:8px 0; }
+  th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--border); vertical-align:top; }
+  th { color:var(--dim); text-transform:uppercase; font-size:11px; letter-spacing:.5px; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px; font-weight:600; }
+  .t-gov{background:rgba(74,222,128,.15);color:var(--green);}
+  .t-ung{background:rgba(251,191,36,.15);color:var(--orange);}
+  .t-doc{background:rgba(167,139,250,.15);color:var(--purple);}
+  .t-fw{background:rgba(248,113,113,.15);color:var(--red);}
+  /* flow diagram */
+  .flow { display:flex; flex-direction:column; gap:0; align-items:center; margin:10px 0; }
+  .node { background:#242836; border:1px solid var(--border); border-radius:8px; padding:10px 16px; font-size:13.5px; text-align:center; max-width:560px; }
+  .node.accent{border-color:var(--accent);} .node.green{border-color:var(--green);}
+  .node.red{border-color:var(--red);} .node.orange{border-color:var(--orange);} .node.purple{border-color:var(--purple);}
+  .node b{display:block;font-size:14px;margin-bottom:2px;}
+  .node small{color:var(--dim);font-size:12px;}
+  .arrow { color:var(--dim); font-size:18px; line-height:1; padding:6px 0; }
+  .branch { display:flex; gap:24px; justify-content:center; align-items:flex-start; }
+  .lane { display:flex; flex-direction:column; align-items:center; gap:0; flex:1; min-width:0; }
+  /* explicit two-way fork that stays side-by-side */
+  .fork { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; width:100%; }
+  .fork .lane { border-top:1px dashed var(--border); padding-top:6px; }
+  .decision { background:#2a2140; border:1px solid var(--purple); border-radius:8px; padding:8px 14px; font-size:13.5px; font-weight:600; text-align:center; }
+  .forkhead { display:flex; justify-content:space-between; font-size:12px; color:var(--dim); font-weight:600; width:100%; padding:2px 4px 0; }
+  .forkhead .yes{color:var(--green);} .forkhead .no{color:var(--orange);}
+  .lbl { font-size:12px; color:var(--dim); margin:2px 0; font-style:italic; }
+  .errnode { background:rgba(248,113,113,.1); border:1px solid var(--red); border-radius:8px; padding:6px 12px; font-size:12.5px; color:var(--red); text-align:center; }
+  .side { display:flex; align-items:center; gap:8px; }
+  .side .arrow{padding:0;}
+  .legend { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--dim); margin-top:8px; }
+  .fwbadge { background:rgba(248,113,113,.12); border:1px dashed var(--red); color:var(--red); border-radius:6px; padding:8px 14px; font-size:13px; font-weight:600; }
+  .note { font-size:13px; color:var(--dim); border-left:3px solid var(--accent); padding:4px 0 4px 12px; margin:10px 0; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media(max-width:760px){ .grid2{grid-template-columns:1fr;} }
+  .kv { font-size:13px; }
+  .kv b { color:var(--cyan); }
+  .rel { font-family:monospace; font-size:13px; color:var(--text); }
+  .rel .r { color:var(--orange); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Rosetta SDL — Architecture &amp; Query Routing</h1>
+<p class="sub">Governed Semantic Data Layer · FastAPI + Neo4j ontology + Athena/Redshift executors + S3 Vectors. Generated from source: <code>src/api/routes_query.py</code>, <code>src/query/router.py</code>, <code>src/metrics/compiler.py</code>, <code>src/query/firewall.py</code>, <code>src/graph/queries.py</code>, <code>src/graph/schema.py</code>.</p>
+
+<h2>1. How a natural-language query is routed</h2>
+<p>Entry point: <code>POST /query/natural-language</code> → <code>route_query()</code> classifies the question by searching Neo4j full-text indexes (with a vector fallback for metrics), producing a route of <b>structured</b>, <b>unstructured</b>, or <b>both</b>.</p>
+
+<div class="card">
+<div class="flow">
+  <div class="node accent"><b>POST /query/natural-language</b><small>NLQueryRequest {question, filters, dimensions}</small></div>
+  <div class="arrow">▼</div>
+  <div class="node"><b>route_query()</b> · <code>src/query/router.py</code><small>searches full-text indexes: table_search, metric_search, document_search<br>+ vector fallback on <code>metric_embedding</code> when full-text score is weak</small></div>
+  <div class="arrow">▼ decides route</div>
+
+  <p class="note" style="text-align:center;border:none;padding:0;">A <b>structured</b> route runs the left column, <b>unstructured</b> runs the right column, and <b>both</b> runs <u>both columns</u> and merges the results into one response.</p>
+  <div class="branch">
+    <!-- STRUCTURED -->
+    <div class="lane">
+      <div class="lbl">route = structured &nbsp;(or the structured half of “both”)</div>
+      <div class="node accent"><b>_handle_structured()</b><small>disambiguate(question) → rank candidate metrics</small></div>
+      <div class="arrow">▼</div>
+      <div class="decision">◆ metric match?</div>
+      <div class="forkhead"><span class="yes">◀ YES · governed</span><span class="no">NO · ungoverned ▶</span></div>
+      <div class="fork">
+        <!-- YES: governed -->
+        <div class="lane">
+          <div class="side"><span class="lbl">metric disabled?</span><span class="errnode">▶ HTTP 503 disabled</span></div>
+          <div class="arrow">▼ enabled</div>
+          <div class="node green"><b>compile_metric()</b><small>deterministic SQL from graph<br>NO LLM · escapes/validates inputs</small></div>
+          <div class="arrow">▼</div>
+          <div class="fwbadge">🛡 SQL FIREWALL · validate()</div>
+          <div class="arrow">▼</div>
+          <div class="node green"><b>_execute_on_datasource()</b><small>resolves executor via <code>EXECUTES_ON</code><br>→ Athena or Redshift</small></div>
+          <div class="arrow">▼</div>
+          <div class="node"><span class="tag t-gov">governed</span><small>intent: metric</small></div>
+        </div>
+        <!-- NO: ungoverned -->
+        <div class="lane">
+          <div class="lbl">no metric matched</div>
+          <div class="node orange"><b>generate_sql()</b><small>LLM (Bedrock) writes SQL,<br>grounded in real schema</small></div>
+          <div class="arrow">▼</div>
+          <div class="fwbadge">🛡 SQL FIREWALL · validate()</div>
+          <div class="arrow">▼</div>
+          <div class="node orange"><b>athena_execute_query()</b><small>legacy Athena executor<br>(no datasource binding)</small></div>
+          <div class="arrow">▼</div>
+          <div class="node"><span class="tag t-ung">ungoverned</span><small>intent: analytical</small></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- UNSTRUCTURED -->
+    <div class="lane">
+      <div class="lbl">route = unstructured &nbsp;(or the unstructured half of “both”)</div>
+      <div class="node purple"><b>search_vectors()</b> · <code>vectors_executor.py</code><small>embed question (Titan) →<br>kNN query against <b>S3 Vectors</b> buckets<br>(bucket/index read from Document nodes)</small></div>
+      <div class="arrow">▼</div>
+      <div class="node"><span class="tag t-doc">document</span><small>vector_results[]</small></div>
+      <div class="lbl">🛡 no SQL firewall here — not SQL</div>
+    </div>
+  </div>
+</div>
+<div class="legend">
+  <span><span class="tag t-gov">governed</span> deterministic, compiled from the graph</span>
+  <span><span class="tag t-ung">ungoverned</span> LLM-generated SQL</span>
+  <span><span class="tag t-doc">document</span> semantic search over S3 Vectors</span>
+</div>
+</div>
+
+<h3>What happens when no metric matches?</h3>
+<div class="card">
+<p>In <code>_handle_structured()</code> (<code>routes_query.py:208</code>), if <code>disambiguate()</code> returns no metric (or the compiled metric is invalid), the pipeline <b>falls back to LLM SQL generation</b>:</p>
+<ol>
+  <li><code>generate_sql(question, disambiguation, graph, bedrock.query_model)</code> — the LLM writes SQL grounded in the real schema pulled from the graph. This is <span class="tag t-ung">ungoverned</span> — the SQL is <b>not</b> deterministic and not from a curated metric.</li>
+  <li>The result <b>still passes through the SQL firewall</b> (<code>routes_query.py:212</code>) — ungoverned does not mean unguarded.</li>
+  <li>Execution uses the <b>legacy Athena executor</b> (<code>athena_execute_query</code>), not a datasource-resolved executor, because there is no metric → no <code>EXECUTES_ON</code> binding. Response is tagged <code>query_type: "ungoverned"</code>, <code>intent: "analytical"</code>.</li>
+</ol>
+<p class="note">Contrast: a <b>governed</b> match compiles deterministic SQL (no LLM) and routes to the metric's bound datasource engine. An <b>ungoverned</b> miss uses the LLM and defaults to Athena.</p>
+</div>
+
+<h2>2. When is the SQL firewall invoked?</h2>
+<p><code>SQLFirewall.validate(sql)</code> (<code>src/query/firewall.py</code>) runs on <b>every path that executes SQL</b>, immediately before execution. It parses SQL with sqlglot (Trino dialect) and denies any table not in the allowlist. It also excludes CTE names (they're internal aliases) and inspects subqueries/CTEs/UNIONs for real table refs.</p>
+<table>
+  <tr><th>Path</th><th>Endpoint / function</th><th>Firewall?</th></tr>
+  <tr><td>Governed metric query</td><td><code>POST /metrics/{id}/query</code> → <code>query_metric</code></td><td><span class="tag t-fw">✓ before execute</span></td></tr>
+  <tr><td>NL → governed metric</td><td><code>_handle_structured</code> (compile path)</td><td><span class="tag t-fw">✓</span></td></tr>
+  <tr><td>NL → ungoverned LLM SQL</td><td><code>_handle_structured</code> (fallback)</td><td><span class="tag t-fw">✓</span></td></tr>
+  <tr><td>Compose (derived / multi-metric)</td><td><code>POST /query/compose</code></td><td><span class="tag t-fw">✓</span></td></tr>
+  <tr><td>Direct SQL</td><td><code>POST /query/sql</code></td><td><span class="tag t-fw">✓</span></td></tr>
+  <tr><td>Metric compile (no execution)</td><td><code>POST /metrics/{id}/compile</code></td><td>— (returns SQL only, never runs it)</td></tr>
+  <tr><td>Document / vector search</td><td><code>search_vectors</code></td><td>— (not SQL)</td></tr>
+</table>
+<div class="card">
+<h3>Firewall modes (env <code>FIREWALL_MODE</code>)</h3>
+<ul class="kv">
+  <li><b>catalog</b> (default) — allowlist is the set of tables known to the graph, resolved <b>lazily on each validate()</b> (30s cache), so tables added by a scan become allowed automatically.</li>
+  <li><b>explicit</b> — only <code>config.allowed_tables</code>.</li>
+  <li><b>disabled</b> — allow everything (logs a loud warning; the ONLY way to bypass).</li>
+</ul>
+<p class="note">Security invariant: an <b>empty allowlist denies all</b> (fail-closed) — it is never a silent no-op.</p>
+</div>
+
+<h2>3. The Neo4j ontology — nodes, properties, relationships</h2>
+<p class="sub">Two conceptually different <code>:DataSource</code> nodes coexist: a <b>Glue-database</b> node (keyed by <code>name</code>, created during scan, <code>CONTAINS</code> tables) and an <b>executor datasource</b> node (keyed by <code>datasource_id</code>, e.g. <code>ds_default_athena</code>, <code>PROVIDES</code> tables and is the <code>EXECUTES_ON</code> target for metrics).</p>
+
+<div class="grid2">
+<div class="card">
+<h3>Node labels &amp; key properties</h3>
+<table>
+  <tr><th>Node</th><th>Stored properties</th></tr>
+  <tr><td><b>:Metric</b></td><td>metric_id, name, definition, expression, type (simple/derived), filters, grain, synonyms, synonyms_text, time_grains, source_table, joins_json, parameters_json, base_metrics, source, <b>embedding</b> (1024-dim vector)</td></tr>
+  <tr><td><b>:Table</b></td><td>full_name, name, database, description, catalog_type, row_count_approx, datasource_id</td></tr>
+  <tr><td><b>:Column</b></td><td>name, table, data_type, description, is_partition, is_primary_key</td></tr>
+  <tr><td><b>:DataSource</b></td><td>datasource_id, name, type, endpoint, database, region, secret_arn, status, enabled, last_health_check — <i>(or name/glue_database/catalog_type for the Glue-db variant)</i></td></tr>
+  <tr><td><b>:Document</b></td><td>s3_key, name, type, description, <b>vector_bucket</b>, <b>vector_index</b></td></tr>
+  <tr><td><b>:MetadataKey</b></td><td>name, document, data_type, filterable</td></tr>
+  <tr><td><b>:BusinessTerm</b></td><td>name, definition, synonyms</td></tr>
+  <tr><td><b>:Concept</b></td><td>name</td></tr>
+</table>
+</div>
+<div class="card">
+<h3>Relationships</h3>
+<div class="rel">
+(:DataSource)-[<span class="r">:CONTAINS</span>]→(:Table)<br>
+<small style="color:var(--dim)">Glue-db datasource owns table</small><br><br>
+(:DataSource)-[<span class="r">:PROVIDES</span>]→(:Table)<br>
+<small style="color:var(--dim)">executor datasource serves table</small><br><br>
+(:Table)-[<span class="r">:HAS_COLUMN</span>]→(:Column)<br>
+(:Table)-[<span class="r">:JOINS_TO</span>]→(:Table)<br>
+<small style="color:var(--dim)">{on_column, join_type}</small><br><br>
+(:Metric)-[<span class="r">:MEASURES</span>]→(:Table)<br>
+(:Metric)-[<span class="r">:EXECUTES_ON</span>]→(:DataSource)<br>
+<small style="color:var(--dim)">which engine runs this metric</small><br><br>
+(:Metric)-[<span class="r">:DERIVES_FROM</span>]→(:Metric)<br>
+<small style="color:var(--dim)">derived metric ← base metrics</small><br><br>
+(:Metric)-[<span class="r">:USES_COLUMN</span>]→(:Column)<br>
+(:BusinessTerm)-[<span class="r">:MAPS_TO</span>]→(:Metric)<br>
+(:Document)-[<span class="r">:HAS_METADATA_KEY</span>]→(:MetadataKey)<br>
+(:Document)-[<span class="r">:COVERS_CONCEPT</span>]→(:Concept)<br>
+(… )-[<span class="r">:RELATES_TO</span>]→(…)
+</div>
+</div>
+</div>
+
+<h2>4. Vectors — what's stored, and where</h2>
+<p>There are <b>two separate vector stores</b>, used for two different purposes:</p>
+
+<div class="grid2">
+<div class="card">
+<h3>Metric embeddings → in Neo4j</h3>
+<ul class="kv">
+  <li>Stored <b>on the Metric node</b> as the <code>embedding</code> property (<code>SET_METRIC_EMBEDDING</code>).</li>
+  <li>Model: <b>Titan</b> <code>amazon.titan-embed-text-v2:0</code>, <b>1024 dims</b>, cosine similarity.</li>
+  <li>Indexed by a Neo4j <b>vector index</b> <code>metric_embedding</code> (<code>src/graph/schema.py:54</code>), created <code>FOR (m:Metric) ON (m.embedding)</code>.</li>
+  <li>Used by <code>route_query</code>/<code>disambiguate</code> as a <b>fallback</b> when full-text metric matching is weak — i.e. to decide "does this question map to a governed metric?".</li>
+  <li>Embedding text = name + definition + synonyms (<code>build_metric_embedding_text</code>).</li>
+</ul>
+</div>
+<div class="card">
+<h3>Document embeddings → in S3 Vectors</h3>
+<ul class="kv">
+  <li>The Neo4j <b>Document node does NOT store the embedding</b>. It stores only <b>pointers</b>: <code>vector_bucket</code> and <code>vector_index</code>.</li>
+  <li>Actual document vectors live in <b>Amazon S3 Vectors</b> buckets/indexes (external to the graph).</li>
+  <li><code>search_vectors()</code> reads the bucket/index from Document nodes, embeds the question (Titan), then calls the S3 Vectors <code>query_vectors</code> API for kNN.</li>
+  <li>This is the <b>unstructured</b> path — semantic document retrieval, not SQL aggregation.</li>
+</ul>
+</div>
+</div>
+<div class="card">
+<h3>Full-text indexes (Neo4j, for routing/disambiguation)</h3>
+<p class="kv"><code>table_search</code>, <code>column_search</code>, <code>metric_search</code>, <code>document_search</code>, <code>business_term_search</code> (<code>src/graph/schema.py</code>). These drive the first-pass keyword routing before the metric vector fallback kicks in.</p>
+</div>
+
+<h2>5. End-to-end summary</h2>
+<div class="card">
+<ul>
+  <li><b>Governed</b> question → matched Metric → deterministic <code>compile_metric</code> SQL → firewall → executor bound via <code>EXECUTES_ON</code> (Athena/Redshift).</li>
+  <li><b>No metric</b> → LLM <code>generate_sql</code> (ungoverned) → firewall → legacy Athena.</li>
+  <li><b>Document</b> question → <code>search_vectors</code> → S3 Vectors kNN (no SQL, no firewall).</li>
+  <li><b>Firewall</b> guards every SQL execution; fail-closed by default; catalog-derived allowlist; CTE-aware.</li>
+  <li><b>Graph</b> stores the semantic model (metrics, tables, columns, joins, datasources, documents); <b>metric embeddings live on the node</b>; <b>document embeddings live in S3 Vectors</b> and the node only points to them.</li>
+</ul>
+</div>
+
+<p class="sub" style="margin-top:30px">Rosetta SDL architecture reference · <code>docs/architecture.html</code></p>
+</div>
+</body>
+</html>

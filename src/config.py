@@ -8,12 +8,14 @@ from pathlib import Path
 
 import yaml
 
+from src.constants import DEFAULT_ATHENA_WORKGROUP, DEFAULT_AWS_REGION
+
 
 @dataclass
 class Neo4jConfig:
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
-    password: str = "semantic-layer"
+    password: str = ""  # no baked-in default; supply via NEO4J_PASSWORD env var
 
 
 @dataclass
@@ -31,7 +33,7 @@ class VectorBucketConfig:
 
 @dataclass
 class AthenaConfig:
-    workgroup: str = "primary"
+    workgroup: str = DEFAULT_ATHENA_WORKGROUP
     output_bucket: str = ""
 
 
@@ -48,6 +50,27 @@ class EmbeddingConfig:
     fulltext_confidence_threshold: float = 1.0  # below this Lucene score, try vector
     vector_min_score: float = 0.6  # minimum cosine similarity to accept
     enabled: bool = True  # kill-switch for vector search
+    # Model used to embed the query before an S3 Vectors kNN search. Configurable
+    # in the UI so it can be matched to whatever the vectors were ingested with.
+    s3vectors_model_id: str = "amazon.titan-embed-text-v2:0"
+
+
+@dataclass
+class DataSourceConfig:
+    datasource_id: str = ""
+    name: str = ""
+    type: str = "athena"  # "athena" | "redshift_serverless"
+    endpoint: str = ""  # workgroup name
+    database: str = ""
+    region: str = DEFAULT_AWS_REGION
+    secret_arn: str = ""
+    output_location: str = ""  # S3 output (Athena only)
+
+
+@dataclass
+class HealthPollerConfig:
+    interval: int = 30  # seconds between health checks
+    failure_threshold: int = 3  # consecutive failures before unhealthy
 
 
 @dataclass
@@ -58,6 +81,8 @@ class SemanticLayerConfig:
     athena: AthenaConfig = field(default_factory=AthenaConfig)
     bedrock: BedrockConfig = field(default_factory=BedrockConfig)
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    datasources: list[DataSourceConfig] = field(default_factory=list)
+    health_poller: HealthPollerConfig = field(default_factory=HealthPollerConfig)
     metrics_file: str = ""
     allowed_tables: list[str] = field(default_factory=list)
     max_query_rows: int = 500
@@ -85,6 +110,10 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
             cfg.bedrock = BedrockConfig(**data["bedrock"])
         if "embedding" in data:
             cfg.embedding = EmbeddingConfig(**data["embedding"])
+        if "datasources" in data:
+            cfg.datasources = [DataSourceConfig(**ds) for ds in data["datasources"]]
+        if "health_poller" in data:
+            cfg.health_poller = HealthPollerConfig(**data["health_poller"])
         cfg.metrics_file = data.get("metrics_file", cfg.metrics_file)
         cfg.allowed_tables = data.get("allowed_tables", cfg.allowed_tables)
         cfg.max_query_rows = data.get("max_query_rows", cfg.max_query_rows)

@@ -2,22 +2,30 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, UploadFile
+from pydantic import BaseModel, field_validator
 
 from src.catalog.models import SearchResult, TableSummary
+from src.config import SemanticLayerConfig
 from src.graph import queries
 from src.graph.client import GraphClient
+from src.query.embeddings import get_embedding
+from src.text_utils import MAX_DESCRIPTION_WORDS, exceeds_word_limit, truncate_words
+
+# Uploaded document metadata is capped before embedding (feeds a 1024-dim index).
+MAX_METADATA_WORDS = 1000
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 # Injected at startup
 _graph: GraphClient | None = None
+_config: SemanticLayerConfig | None = None
 
 
-def init(graph: GraphClient) -> None:
-    global _graph
+def init(graph: GraphClient, config: SemanticLayerConfig | None = None) -> None:
+    global _graph, _config
     _graph = graph
+    _config = config
 
 
 def _get_graph() -> GraphClient:
@@ -50,21 +58,22 @@ async def get_table_details(table_name: str):
 class DescriptionUpdate(BaseModel):
     description: str
 
-
-@router.patch("/tables/{table_name:path}/description")
-async def update_table_description(table_name: str, req: DescriptionUpdate):
-    """Update a table's description."""
-    graph = _get_graph()
-    results = graph.query("MATCH (t:Table {full_name: $fn}) RETURN t", {"fn": table_name})
-    if not results:
-        raise HTTPException(404, f"Table '{table_name}' not found")
-    graph.write(
-        "MATCH (t:Table {full_name: $fn}) SET t.description = $desc",
-        {"fn": table_name, "desc": req.description},
-    )
-    return {"ok": True}
+    @field_validator("description")
+    @classmethod
+    def _cap_words(cls, v: str) -> str:
+        # Manual edits are rejected (not truncated) so the user can fix them.
+        if exceeds_word_limit(v):
+            raise ValueError(f"Description must be {MAX_DESCRIPTION_WORDS} words or fewer")
+        return v
 
 
+class DeprecationUpdate(BaseModel):
+    is_deprecated: bool
+
+
+# NOTE: column routes MUST be registered before the table-description route.
+# The table route's greedy `{table_name:path}` converter otherwise swallows
+# `.../columns/{col}/description` URLs and shadows these handlers.
 @router.patch("/tables/{table_name:path}/columns/{column_name}/description")
 async def update_column_description(table_name: str, column_name: str, req: DescriptionUpdate):
     """Update a column's description."""
@@ -78,6 +87,38 @@ async def update_column_description(table_name: str, column_name: str, req: Desc
     graph.write(
         "MATCH (c:Column {name: $name, table: $table}) SET c.description = $desc",
         {"name": column_name, "table": table_name, "desc": req.description},
+    )
+    return {"ok": True}
+
+
+@router.patch("/tables/{table_name:path}/columns/{column_name}/deprecation")
+async def update_column_deprecation(table_name: str, column_name: str, req: DeprecationUpdate):
+    """Mark a column deprecated (or not). Deprecation takes precedence over the
+    description in the UI and steers the LLM SQL generator away from the column."""
+    graph = _get_graph()
+    results = graph.query(
+        "MATCH (c:Column {name: $name, table: $table}) RETURN c",
+        {"name": column_name, "table": table_name},
+    )
+    if not results:
+        raise HTTPException(404, f"Column '{column_name}' not found in '{table_name}'")
+    graph.write(
+        "MATCH (c:Column {name: $name, table: $table}) SET c.is_deprecated = $dep",
+        {"name": column_name, "table": table_name, "dep": req.is_deprecated},
+    )
+    return {"ok": True}
+
+
+@router.patch("/tables/{table_name:path}/description")
+async def update_table_description(table_name: str, req: DescriptionUpdate):
+    """Update a table's description."""
+    graph = _get_graph()
+    results = graph.query("MATCH (t:Table {full_name: $fn}) RETURN t", {"fn": table_name})
+    if not results:
+        raise HTTPException(404, f"Table '{table_name}' not found")
+    graph.write(
+        "MATCH (t:Table {full_name: $fn}) SET t.description = $desc",
+        {"fn": table_name, "desc": req.description},
     )
     return {"ok": True}
 
@@ -119,6 +160,45 @@ async def update_document_description(s3_key: str, req: DescriptionUpdate):
         {"key": s3_key, "desc": req.description},
     )
     return {"ok": True}
+
+
+@router.post("/documents/{s3_key:path}/metadata-file")
+async def upload_document_metadata(s3_key: str, file: UploadFile):
+    """Upload a txt/md metadata file for a document; vectorize it for routing.
+
+    The file text is capped at MAX_METADATA_WORDS, embedded with the configured
+    S3 Vectors embedding model, and stored on the Document node so the router's
+    semantic fallback can match questions to this document/index.
+    """
+    graph = _get_graph()
+    existing = graph.query("MATCH (d:Document {s3_key: $key}) RETURN d", {"key": s3_key})
+    if not existing:
+        raise HTTPException(404, f"Document '{s3_key}' not found")
+
+    name = (file.filename or "").lower()
+    if not (name.endswith(".txt") or name.endswith(".md")):
+        raise HTTPException(400, "Only .txt or .md files are supported")
+
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "File must be UTF-8 text")
+    text = truncate_words(text.strip(), MAX_METADATA_WORDS)
+    if not text:
+        raise HTTPException(400, "File is empty")
+
+    model_id = _config.embedding.s3vectors_model_id if _config else "amazon.titan-embed-text-v2:0"
+    embedding = get_embedding(text, model_id)
+    if not embedding:
+        raise HTTPException(502, "Failed to generate embedding for the uploaded metadata")
+
+    graph.write(queries.SET_DOCUMENT_METADATA_EMBEDDING, {
+        "s3_key": s3_key,
+        "embedding": embedding,
+        "metadata_text": text,
+    })
+    return {"ok": True, "s3_key": s3_key, "words": len(text.split())}
 
 
 @router.get("/search", response_model=list[SearchResult])
