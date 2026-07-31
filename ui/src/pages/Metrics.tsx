@@ -753,7 +753,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Time grains — allowed roll-ups (comma-separated)</label>
+                  <label>Time grains — allowed roll-ups (comma-separated) <FieldHelp text="The time buckets a user may roll this metric's date/timestamp dimension up to, e.g. day, week, month, quarter, year. The query layer applies DATE_TRUNC to that grain. Leave empty to allow any supported grain." /></label>
                   <input value={form.time_grains} onChange={(e) => updateField('time_grains', e.target.value)}
                     placeholder="e.g. day, week, month, quarter, year" />
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
@@ -762,11 +762,11 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Additivity</label>
+                  <label>Additivity <FieldHelp text="Whether this metric can be safely SUMMED across dimensions. Additive: sum across everything incl. time (revenue, counts). Semi-additive: sum across all dimensions EXCEPT time — summing a point-in-time snapshot like balance or inventory across days double-counts. Non-additive: cannot be summed across ANY dimension (averages, ratios, distinct counts) — averaging averages or adding distinct counts is wrong; it must be recomputed from base rows at the target grain." /></label>
                   <select value={form.aggregation} onChange={(e) => updateField('aggregation', e.target.value)}>
-                    <option value="additive">Additive — safe to sum across every dimension (e.g. revenue)</option>
+                    <option value="additive">Additive — safe to sum across every dimension (e.g. revenue, order count)</option>
                     <option value="semi_additive">Semi-additive — sum across all dims except time (e.g. balance, inventory)</option>
-                    <option value="non_additive">Non-additive — cannot be summed (e.g. average, ratio, distinct count)</option>
+                    <option value="non_additive">Non-additive — never summed; recompute from rows (e.g. average, ratio, distinct count)</option>
                   </select>
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
                     Controls whether the metric can be rolled up. Semi-additive metrics are rejected when summed across a time grain.
