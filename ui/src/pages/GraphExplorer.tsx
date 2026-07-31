@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, Link } from 'react-router-dom'
 import { api, type GraphNode, type GraphEdge } from '../api'
 import FieldHelp from '../components/FieldHelp'
 
@@ -60,6 +60,7 @@ export default function GraphExplorer() {
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const dragRef = useRef<string | null>(null)
   const animRef = useRef<number>(0)
+  const tickRef = useRef<(() => void) | null>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const alphaRef = useRef(1)
   const filterKeyRef = useRef(0)
@@ -76,6 +77,8 @@ export default function GraphExplorer() {
   useEffect(() => { panYRef.current = panY }, [panY])
   const isPanning = useRef(false)
   const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  // Distinguish a click (select node) from a drag: record mousedown position.
+  const downPos = useRef<{ x: number; y: number; nodeId: string | null }>({ x: 0, y: 0, nodeId: null })
 
   // URL params for deep-linking (e.g., /graph?metric=m_009)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -84,13 +87,26 @@ export default function GraphExplorer() {
   const [selectedDatasource, setSelectedDatasource] = useState<string>('__all__')
   const [selectedTable, setSelectedTable] = useState<string>('__all__')
   const [selectedMetric, setSelectedMetric] = useState<string>('__all__')
-  const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(Object.keys(NODE_COLORS)))
+  // Columns are the most numerous, noisiest nodes — hidden by default; toggle on demand.
+  const [visibleTypes, setVisibleTypes] = useState<Set<string>>(
+    new Set(Object.keys(NODE_COLORS).filter((t) => t !== 'Column')),
+  )
+
+  // Node clicked for inspection (side panel)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  // Per-node neighbor expansions layered on top of type filters (id -> true)
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set())
+  // Node search
+  const [nodeSearch, setNodeSearch] = useState('')
 
   // Init metric from URL
   useEffect(() => {
     const m = searchParams.get('metric')
     if (m) setSelectedMetric(m)
   }, [])
+
+  // Fast id -> node lookup (replaces .find in hot loops)
+  const nodeIndex = useMemo(() => new Map(allNodes.map((n) => [n.id, n])), [allNodes])
 
   useEffect(() => {
     api.graphData()
@@ -219,6 +235,15 @@ export default function GraphExplorer() {
 
   // Filtered node IDs — the core filter logic
   const visibleNodeIds = useMemo(() => {
+    // A node passes the type filter if its type is visible OR it was explicitly
+    // expanded (so "expand neighbors" can pull in an otherwise-hidden Column).
+    const passesType = (id: string) => {
+      const n = nodeIndex.get(id)
+      return !!n && (visibleTypes.has(n.type) || expandedNodeIds.has(id))
+    }
+
+    let base: Set<string>
+
     // Metric filter: BFS from metric node (2 hops to get metric→table→columns, metric→businessterm, etc.)
     if (selectedMetric !== '__all__') {
       const metricNode = allNodes.find((n) => n.type === 'Metric' && n.label === selectedMetric)
@@ -232,31 +257,30 @@ export default function GraphExplorer() {
           if (dsNode) connected.add(dsNode.id)
         }
       }
-      return new Set([...connected].filter((id) => {
-        const n = allNodes.find((n) => n.id === id)
-        return n && visibleTypes.has(n.type)
-      }))
-    }
-
-    // Table filter: 1-hop neighbors
-    if (selectedTable !== '__all__') {
+      base = new Set([...connected].filter(passesType))
+    } else if (selectedTable !== '__all__') {
+      // Table filter: 1-hop neighbors
       const tableNode = allNodes.find((n) => n.type === 'Table' && n.label === selectedTable)
       if (!tableNode) return new Set<string>()
       const connected = bfsConnected(new Set([tableNode.id]), allEdges, 1)
-      return new Set([...connected].filter((id) => {
-        const n = allNodes.find((n) => n.id === id)
-        return n && visibleTypes.has(n.type)
-      }))
+      base = new Set([...connected].filter(passesType))
+    } else {
+      // Datasource or all
+      base = new Set(allNodes.filter((n) => {
+        if (!(visibleTypes.has(n.type) || expandedNodeIds.has(n.id))) return false
+        if (selectedDatasource === '__all__') return true
+        const ds = nodeToDatasource.get(n.id)
+        return ds ? ds === selectedDatasource : true
+      }).map((n) => n.id))
     }
 
-    // Datasource or all
-    return new Set(allNodes.filter((n) => {
-      if (!visibleTypes.has(n.type)) return false
-      if (selectedDatasource === '__all__') return true
-      const ds = nodeToDatasource.get(n.id)
-      return ds ? ds === selectedDatasource : true
-    }).map((n) => n.id))
-  }, [allNodes, allEdges, selectedDatasource, selectedTable, selectedMetric, visibleTypes, nodeToDatasource])
+    // Layer in explicitly-expanded nodes' 1-hop neighbors, regardless of type filter.
+    if (expandedNodeIds.size > 0) {
+      const grown = bfsConnected(new Set(expandedNodeIds), allEdges, 1)
+      for (const id of grown) if (nodeIndex.has(id)) base.add(id)
+    }
+    return base
+  }, [allNodes, allEdges, selectedDatasource, selectedTable, selectedMetric, visibleTypes, nodeToDatasource, nodeIndex, expandedNodeIds])
 
   const visibleEdges = useMemo(() =>
     allEdges.filter((e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target)),
@@ -300,7 +324,7 @@ export default function GraphExplorer() {
     return () => clearTimeout(fitTimer)
   }, [visibleNodeIds, fitToNodes])
 
-  // Force simulation — runs continuously, operates on nodesRef
+  // Force simulation — sleeps when settled, wakes on interaction (see wakeSim).
   useEffect(() => {
     if (allNodes.length === 0) return
 
@@ -312,6 +336,14 @@ export default function GraphExplorer() {
 
       const visible = nodesRef.current.filter((n) => visibleNodeIds.has(n.id))
       if (visible.length === 0) { animRef.current = requestAnimationFrame(tick); draw(visible); return }
+
+      // Sleep the sim once settled (unless dragging): stop burning frames on a
+      // static layout. wakeSim() restarts it on filter change / drag / expand.
+      if (alpha <= 0.001 && !dragRef.current) {
+        draw(visible)
+        animRef.current = 0
+        return
+      }
 
       // Centering: pull toward center of visible bounds
       let cx = 0, cy = 0
@@ -384,9 +416,18 @@ export default function GraphExplorer() {
       animRef.current = requestAnimationFrame(tick)
     }
 
+    tickRef.current = tick
     animRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(animRef.current)
+    return () => { cancelAnimationFrame(animRef.current); animRef.current = 0 }
   }, [allNodes, visibleNodeIds, visibleEdges])
+
+  // Re-heat the layout and restart the RAF loop if it went to sleep.
+  const wakeSim = useCallback((alpha = 0.5) => {
+    alphaRef.current = Math.max(alphaRef.current, alpha)
+    if (animRef.current === 0 && tickRef.current) {
+      animRef.current = requestAnimationFrame(tickRef.current)
+    }
+  }, [])
 
   const draw = (visible?: SimNode[]) => {
     const canvas = canvasRef.current; if (!canvas) return
@@ -418,12 +459,16 @@ export default function GraphExplorer() {
       ctx.beginPath()
       ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke()
 
-      // Edge label
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
-      ctx.fillStyle = dimColor
-      ctx.font = `${9 / Math.max(z, 0.6)}px Inter, system-ui, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.fillText(e.type, mx, my - 4)
+      // Edge label — only when zoomed in enough to be readable (declutters the
+      // wide view) or when the edge touches the hovered node.
+      const touchesHover = hoveredId && (e.source === hoveredId || e.target === hoveredId)
+      if (z >= 1.2 || touchesHover) {
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+        ctx.fillStyle = dimColor
+        ctx.font = `${9 / Math.max(z, 0.6)}px Inter, system-ui, sans-serif`
+        ctx.textAlign = 'center'
+        ctx.fillText(e.type, mx, my - 4)
+      }
     }
 
     // Nodes
@@ -516,16 +561,18 @@ export default function GraphExplorer() {
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top
+    downPos.current = { x: e.clientX, y: e.clientY, nodeId: null }
     const node = getNodeAt(sx, sy)
     if (node) {
       dragRef.current = node.id
-      // Boost alpha so dragged neighbors respond
-      alphaRef.current = Math.max(alphaRef.current, 0.3)
+      downPos.current.nodeId = node.id
+      // Boost alpha so dragged neighbors respond, and wake the loop if asleep.
+      wakeSim(0.3)
     } else {
       isPanning.current = true
       panStart.current = { x: e.clientX, y: e.clientY, panX: panXRef.current, panY: panYRef.current }
     }
-  }, [getNodeAt])
+  }, [getNodeAt, wakeSim])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = canvasRef.current?.getBoundingClientRect(); if (!rect) return
@@ -547,7 +594,12 @@ export default function GraphExplorer() {
     }
   }, [screenToWorld, getNodeAt])
 
-  const handleMouseUp = useCallback(() => {
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    // A release with no meaningful movement over a node = a click → inspect it.
+    const moved = Math.abs(e.clientX - downPos.current.x) + Math.abs(e.clientY - downPos.current.y)
+    if (downPos.current.nodeId && moved < 5) {
+      setSelectedNodeId(downPos.current.nodeId)
+    }
     dragRef.current = null
     isPanning.current = false
   }, [])
@@ -568,6 +620,35 @@ export default function GraphExplorer() {
       searchParams.set('metric', label)
     }
     setSearchParams(searchParams, { replace: true })
+  }
+
+  const selectedNode = useMemo(
+    () => (selectedNodeId ? nodeIndex.get(selectedNodeId) ?? null : null),
+    [selectedNodeId, nodeIndex],
+  )
+
+  // Pull a clicked node's 1-hop neighbors into view (even hidden types).
+  const expandNeighbors = useCallback((id: string) => {
+    setExpandedNodeIds((prev) => new Set(prev).add(id))
+    wakeSim(0.6)
+  }, [wakeSim])
+
+  // Search: focus/center a node by exact label match across all types.
+  const focusNodeByLabel = useCallback((label: string) => {
+    const n = nodesRef.current.find((x) => x.label === label)
+    if (!n) return
+    setSelectedNodeId(n.id)
+    // Ensure it's visible: if its type is hidden, expand it in.
+    if (!visibleNodeIds.has(n.id)) setExpandedNodeIds((prev) => new Set(prev).add(n.id))
+    fitToNodes([n])
+  }, [visibleNodeIds, fitToNodes])
+
+  // Link a node to its detail page where one exists.
+  const detailLink = (n: GraphNode): string | null => {
+    if (n.type === 'Table') return `/tables/${n.label}`
+    if (n.type === 'Metric') return `/metrics`
+    if (n.type === 'Document') return `/documents`
+    return null
   }
 
   const filterDesc = useMemo(() => {
@@ -651,6 +732,22 @@ export default function GraphExplorer() {
         </div>
 
         <div className="graph-toolbar-right">
+          <div className="graph-filter-group">
+            <label className="graph-filter-label">Find node</label>
+            <input
+              className="graph-filter-select"
+              list="graph-node-search"
+              placeholder="Search by name…"
+              value={nodeSearch}
+              onChange={(e) => {
+                setNodeSearch(e.target.value)
+                if (allNodes.some((n) => n.label === e.target.value)) focusNodeByLabel(e.target.value)
+              }}
+            />
+            <datalist id="graph-node-search">
+              {allNodes.map((n) => <option key={n.id} value={n.label}>{n.type}</option>)}
+            </datalist>
+          </div>
           <span className="graph-stats">
             {visibleNodeIds.size} nodes, {visibleEdges.length} edges{filterDesc}
           </span>
@@ -679,6 +776,29 @@ export default function GraphExplorer() {
         </div>
 
         <div className="graph-zoom-indicator">{Math.round(zoom * 100)}%</div>
+
+        {selectedNode && (
+          <div className="graph-inspect">
+            <div className="graph-inspect-head">
+              <span className="graph-legend-dot" style={{ background: NODE_COLORS[selectedNode.type] || '#6c8cff' }} />
+              <strong>{selectedNode.label}</strong>
+              <button className="btn btn-ghost btn-sm" onClick={() => setSelectedNodeId(null)} style={{ marginLeft: 'auto' }}>✕</button>
+            </div>
+            <dl className="graph-inspect-meta">
+              <div><dt>Type</dt><dd>{selectedNode.type}</dd></div>
+              {selectedNode.datasource && <div><dt>Datasource</dt><dd>{selectedNode.datasource}</dd></div>}
+              {selectedNode.type === 'Metric' && (
+                <div><dt>Embedding</dt><dd>{selectedNode.properties?.hasEmbedding ? 'yes' : 'no'}</dd></div>
+              )}
+            </dl>
+            <div className="graph-inspect-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => expandNeighbors(selectedNode.id)}>Expand neighbors</button>
+              {detailLink(selectedNode) && (
+                <Link className="btn btn-ghost btn-sm" to={detailLink(selectedNode)!}>Open details →</Link>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
