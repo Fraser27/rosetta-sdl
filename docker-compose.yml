@@ -30,7 +30,7 @@ services:
       ATHENA_OUTPUT_BUCKET: ""  # Overridden by CDK with S3 bucket
       # METRICS_FILE: /app/sample/metrics.yaml  # uncomment to load sample metrics
       BEDROCK_QUERY_MODEL: global.anthropic.claude-sonnet-4-5-20250929-v1:0
-      BEDROCK_ENRICHMENT_MODEL: global.anthropic.claude-haiku-4-5-20251001-v1:0
+      BEDROCK_ENRICHMENT_MODEL: us.amazon.nova-2-lite-v1:0
     depends_on:
       neo4j:
         condition: service_healthy

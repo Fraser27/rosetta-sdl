@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 import time
@@ -11,7 +10,6 @@ from dataclasses import dataclass, field
 
 import boto3
 
-from src.constants import BEDROCK_ANTHROPIC_VERSION
 from src.graph import queries
 from src.text_utils import extract_json, retry_bedrock, truncate_words
 from src.graph.client import GraphClient
@@ -96,19 +94,17 @@ def _parse_llm_json(text: str) -> dict:
 
 
 def _call_bedrock(bedrock, model_id: str, prompt: str, max_tokens: int = 1024) -> dict:
-    """Call Bedrock (with retry on throttling) and return parsed JSON."""
-    response = retry_bedrock(lambda: bedrock.invoke_model(
+    """Call Bedrock via the Converse API (provider-agnostic) and return parsed JSON.
+
+    Converse normalizes request/response across Anthropic, Amazon Nova, etc., so
+    the enrichment model is freely configurable without per-provider branching.
+    """
+    response = retry_bedrock(lambda: bedrock.converse(
         modelId=model_id,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps({
-            "anthropic_version": BEDROCK_ANTHROPIC_VERSION,
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }),
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": max_tokens},
     ))
-    result = json.loads(response["body"].read())
-    text = result["content"][0]["text"]
+    text = response["output"]["message"]["content"][0]["text"]
     return _parse_llm_json(text)
 
 

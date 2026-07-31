@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 import boto3
 
-from src.constants import BEDROCK_ANTHROPIC_VERSION
 from src.graph.client import GraphClient
 from src.query.disambiguator import DisambiguationResult
 from src.text_utils import extract_sql, retry_bedrock
@@ -51,19 +49,15 @@ def generate_sql(
         "- Return ONLY the SQL query, no explanation\n"
     )
 
+    # Converse API is provider-agnostic (Anthropic, Amazon Nova, etc.), so the
+    # query model is freely configurable without per-provider request formats.
     bedrock = boto3.client("bedrock-runtime")
-    response = retry_bedrock(lambda: bedrock.invoke_model(
+    response = retry_bedrock(lambda: bedrock.converse(
         modelId=model_id,
-        contentType="application/json",
-        accept="application/json",
-        body=json.dumps({
-            "anthropic_version": BEDROCK_ANTHROPIC_VERSION,
-            "max_tokens": 1024,
-            "messages": [{"role": "user", "content": prompt}],
-        }),
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": 1024},
     ))
-    result = json.loads(response["body"].read())
-    text = result["content"][0]["text"]
+    text = response["output"]["message"]["content"][0]["text"]
 
     # Robustly extract SQL (handles fenced ```sql, generic ```, or bare SQL).
     sql = extract_sql(text)

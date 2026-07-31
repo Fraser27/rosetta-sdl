@@ -40,7 +40,9 @@ class AthenaConfig:
 @dataclass
 class BedrockConfig:
     query_model: str = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    enrichment_model: str = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Nova 2 Lite via cross-region inference profile; invoked through the
+    # Converse API so any provider works. Editable in the Configurations UI.
+    enrichment_model: str = "us.amazon.nova-2-lite-v1:0"
 
 
 @dataclass
