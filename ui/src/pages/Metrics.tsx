@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource } from '../api'
+import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource, type MetricVersionSummary } from '../api'
+import FieldHelp from '../components/FieldHelp'
 
 interface JoinRow {
   table: string
@@ -143,6 +144,47 @@ export default function Metrics() {
   // Expanded SQL row in table
   const [expandedSql, setExpandedSql] = useState<Record<string, string | null>>({})
   const [sqlLoading, setSqlLoading] = useState<Record<string, boolean>>({})
+
+  // Version history
+  const [historyMetric, setHistoryMetric] = useState<Metric | null>(null)
+  const [versions, setVersions] = useState<MetricVersionSummary[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [viewedVersion, setViewedVersion] = useState<Metric | null>(null)
+
+  const openHistory = async (m: Metric) => {
+    setHistoryMetric(m)
+    setViewedVersion(null)
+    setVersionsLoading(true)
+    try {
+      setVersions(await api.listMetricVersions(m.metric_id))
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  const viewVersion = async (version: number) => {
+    if (!historyMetric) return
+    try {
+      setViewedVersion(await api.getMetricVersion(historyMetric.metric_id, version))
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
+  }
+
+  const restoreVersion = async (version: number) => {
+    if (!historyMetric) return
+    if (!confirm(`Restore v${version}? This saves the old definition as a new draft version (current state is kept in history).`)) return
+    try {
+      const res = await api.restoreMetricVersion(historyMetric.metric_id, version)
+      showToast(`Restored v${version} as v${res.version} (draft)`)
+      setHistoryMetric(null)
+      load()
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
+  }
 
   const load = () => {
     Promise.all([api.listMetrics(), api.listTables(), api.listDatasourcesFull()])
@@ -502,6 +544,7 @@ export default function Metrics() {
                       <button className="btn btn-ghost btn-sm" onClick={() => handleSetStatus(m, 'deprecated')} style={{ marginRight: 6 }}>Deprecate</button>
                     )}
                     <button className="btn btn-ghost btn-sm" onClick={() => openEdit(m)} style={{ marginRight: 6 }}>Edit</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openHistory(m)} style={{ marginRight: 6 }} title="View version history">History</button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDelete(m)}>Delete</button>
                   </td>
                 </tr>
@@ -530,7 +573,7 @@ export default function Metrics() {
 
             <div className="form-row">
               <div className="form-group">
-                <label>Metric ID</label>
+                <label>Metric ID <FieldHelp text="Stable unique identifier for this metric, e.g. m_007. Cannot be changed after creation; used to reference the metric in queries and derived metrics." /></label>
                 <input value={form.metric_id} onChange={(e) => updateField('metric_id', e.target.value)}
                   placeholder="e.g. m_007" disabled={!!editing} />
               </div>
@@ -620,7 +663,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>SQL Expression</label>
+                  <label>SQL Expression <FieldHelp text="The SQL aggregate that computes the metric, e.g. SUM(o.total_amount) or COUNT(DISTINCT customer_id). Reference the source table and any joined tables by alias." /></label>
                   <input value={form.expression} onChange={(e) => updateField('expression', e.target.value)}
                     placeholder="e.g. SUM(o.total_amount)" />
                 </div>
@@ -704,13 +747,13 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Grain (comma-separated)</label>
+                  <label>Grain (comma-separated) <FieldHelp text="The dimension columns this metric is grouped by (GROUP BY), e.g. order_date, region. Defines the level of detail the metric is reported at." /></label>
                   <input value={form.grain} onChange={(e) => updateField('grain', e.target.value)}
                     placeholder="e.g. order_date, c.customer_name" />
                 </div>
 
                 <div className="form-group">
-                  <label>Time grains — allowed roll-ups (comma-separated)</label>
+                  <label>Time grains — allowed roll-ups (comma-separated) <FieldHelp text="The time buckets a user may roll this metric's date/timestamp dimension up to, e.g. day, week, month, quarter, year. The query layer applies DATE_TRUNC to that grain. Leave empty to allow any supported grain." /></label>
                   <input value={form.time_grains} onChange={(e) => updateField('time_grains', e.target.value)}
                     placeholder="e.g. day, week, month, quarter, year" />
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
@@ -719,11 +762,11 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Additivity</label>
+                  <label>Additivity <FieldHelp text="Whether this metric can be safely SUMMED across dimensions. Additive: sum across everything incl. time (revenue, counts). Semi-additive: sum across all dimensions EXCEPT time — summing a point-in-time snapshot like balance or inventory across days double-counts. Non-additive: cannot be summed across ANY dimension (averages, ratios, distinct counts) — averaging averages or adding distinct counts is wrong; it must be recomputed from base rows at the target grain." /></label>
                   <select value={form.aggregation} onChange={(e) => updateField('aggregation', e.target.value)}>
-                    <option value="additive">Additive — safe to sum across every dimension (e.g. revenue)</option>
+                    <option value="additive">Additive — safe to sum across every dimension (e.g. revenue, order count)</option>
                     <option value="semi_additive">Semi-additive — sum across all dims except time (e.g. balance, inventory)</option>
-                    <option value="non_additive">Non-additive — cannot be summed (e.g. average, ratio, distinct count)</option>
+                    <option value="non_additive">Non-additive — never summed; recompute from rows (e.g. average, ratio, distinct count)</option>
                   </select>
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
                     Controls whether the metric can be rolled up. Semi-additive metrics are rejected when summed across a time grain.
@@ -731,7 +774,7 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Value type</label>
+                  <label>Value type <FieldHelp text="What the metric's number represents, used for formatting and sanity checks: number, currency, percent, ratio, count, or duration." /></label>
                   <select value={form.value_type} onChange={(e) => updateField('value_type', e.target.value)}>
                     <option value="number">Number</option>
                     <option value="currency">Currency</option>
@@ -744,12 +787,12 @@ export default function Metrics() {
 
                 <div className="form-row" style={{ display: 'flex', gap: 12 }}>
                   <div className="form-group" style={{ flex: 1 }}>
-                    <label>Unit (optional)</label>
+                    <label>Unit (optional) <FieldHelp text="Free-form unit label shown with the value, e.g. USD, orders, ms. Display only — doesn't affect the SQL." /></label>
                     <input value={form.unit} onChange={(e) => updateField('unit', e.target.value)}
                       placeholder="e.g. USD, orders, ms" />
                   </div>
                   <div className="form-group" style={{ flex: 1 }}>
-                    <label>Display format (optional)</label>
+                    <label>Display format (optional) <FieldHelp text="Optional number-format pattern hint for consumers, e.g. $#,##0.00 for currency or 0.0% for percent. Display only." /></label>
                     <input value={form.format} onChange={(e) => updateField('format', e.target.value)}
                       placeholder="e.g. $#,##0.00, 0.0%" />
                   </div>
@@ -799,13 +842,13 @@ export default function Metrics() {
             )}
 
             <div className="form-group">
-              <label>Synonyms (comma-separated)</label>
+              <label>Synonyms (comma-separated) <FieldHelp text="Alternate phrasings that should match this metric during search/routing, e.g. total sales, revenue, gross revenue. Improves natural-language matching." /></label>
               <input value={form.synonyms} onChange={(e) => updateField('synonyms', e.target.value)}
                 placeholder="e.g. total sales, revenue, gross revenue" />
             </div>
 
             <div className="form-group">
-              <label>Filters (one per line)</label>
+              <label>Filters (one per line) <FieldHelp text="SQL boolean predicates always applied to this metric (WHERE clause), one per line, e.g. status != 'cancelled'. Must be safe expressions — no subqueries or comments." /></label>
               <textarea value={form.filters} onChange={(e) => updateField('filters', e.target.value)}
                 placeholder={"e.g. status != 'cancelled'"} />
             </div>
@@ -842,6 +885,65 @@ export default function Metrics() {
                 </p>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {historyMetric && (
+        <div className="modal-overlay" onClick={() => setHistoryMetric(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="card-header" style={{ marginBottom: 16 }}>
+              <h3>History — {historyMetric.name} <span className="tag tag-blue">{historyMetric.metric_id}</span></h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => setHistoryMetric(null)}>Close</button>
+            </div>
+
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>
+              Snapshots of prior definitions (up to the last 10). The current live definition is v{historyMetric.version ?? 1}.
+            </p>
+
+            {versionsLoading ? (
+              <p style={{ color: 'var(--text-dim)' }}>Loading…</p>
+            ) : versions.length === 0 ? (
+              <p style={{ color: 'var(--text-dim)' }}>No prior versions yet — history starts accruing from the next edit.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr><th>Version</th><th>Status</th><th>Updated by</th><th>When</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {versions.map((v) => (
+                    <>
+                      <tr key={v.version}>
+                        <td><span className="tag tag-blue">v{v.version}</span></td>
+                        <td>{v.status}</td>
+                        <td style={{ fontSize: 12 }}>{v.updated_by || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                          {v.snapshot_at ? new Date(v.snapshot_at).toLocaleString() : (v.updated_at ? new Date(v.updated_at).toLocaleString() : '—')}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => viewVersion(v.version)} style={{ marginRight: 6 }}>View</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => restoreVersion(v.version)}>Restore</button>
+                        </td>
+                      </tr>
+                      {viewedVersion && viewedVersion.version === v.version && (
+                        <tr key={`${v.version}-detail`}>
+                          <td colSpan={5} style={{ padding: 0 }}>
+                            <pre className="code-block" style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+{`expression:  ${viewedVersion.expression}
+source_table: ${viewedVersion.source_table || '—'}
+grain:       ${(viewedVersion.grain || []).join(', ') || '—'}
+filters:     ${(viewedVersion.filters || []).join(' AND ') || '—'}
+synonyms:    ${(viewedVersion.synonyms || []).join(', ') || '—'}
+definition:  ${viewedVersion.definition || '—'}`}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

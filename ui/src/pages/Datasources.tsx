@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '../api'
 import type { DataSource, DataSourceRequest, TestConnectionJob } from '../api'
+import FieldHelp from '../components/FieldHelp'
 
 const REGIONS = ['us-east-1', 'us-east-2', 'us-west-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-1', 'ap-northeast-1']
 const DS_TYPES = [
@@ -271,7 +272,7 @@ export default function Datasources() {
                 <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Sales Redshift" />
               </div>
               <div className="form-group">
-                <label>Type</label>
+                <label>Type <FieldHelp text="The query engine backing this datasource: AWS Athena (Trino/Presto over Glue) or Redshift Serverless. Determines how metrics on it are executed." /></label>
                 <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
                   {DS_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                 </select>
@@ -280,7 +281,7 @@ export default function Datasources() {
 
             <div className="form-row">
               <div className="form-group">
-                <label>{form.type === 'athena' ? 'Workgroup' : 'Workgroup'}</label>
+                <label>Workgroup <FieldHelp text={form.type === 'athena' ? "The Athena workgroup that runs queries (e.g. primary). Governs the result location and query settings." : "The Redshift Serverless workgroup name that runs queries."} /></label>
                 <input value={form.endpoint} onChange={e => setForm({ ...form, endpoint: e.target.value })} placeholder={form.type === 'athena' ? 'e.g. primary' : 'e.g. sales-workgroup'} />
               </div>
               <div className="form-group">
@@ -298,7 +299,7 @@ export default function Datasources() {
               </div>
               {form.type === 'athena' && (
                 <div className="form-group">
-                  <label>Output Location (S3)</label>
+                  <label>Output Location (S3) <FieldHelp text="S3 path where Athena writes query results, e.g. s3://my-bucket/results/. Required for Athena unless the workgroup enforces its own location." /></label>
                   <input value={form.output_location || ''} onChange={e => setForm({ ...form, output_location: e.target.value || null })} placeholder="s3://bucket/prefix/" />
                 </div>
               )}

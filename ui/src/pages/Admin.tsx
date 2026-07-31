@@ -23,8 +23,9 @@ export default function Admin() {
   const [enrichJob, setEnrichJob] = useState<EnrichmentJob | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Ungoverned query-model config
+  // Ungoverned query-model config (free-text, with suggestions)
   const [queryModel, setQueryModel] = useState('')
+  const [queryModelDraft, setQueryModelDraft] = useState('')
   const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([])
   const [savingModel, setSavingModel] = useState(false)
 
@@ -56,6 +57,7 @@ export default function Admin() {
     }).catch(() => {})
     api.getQueryModel().then((m) => {
       setQueryModel(m.query_model)
+      setQueryModelDraft(m.query_model)
       setAvailableModels(m.available)
     }).catch(() => {})
     api.getS3VectorsModel().then((m) => {
@@ -98,11 +100,13 @@ export default function Admin() {
     }
   }
 
-  const saveQueryModel = async (modelId: string) => {
+  const saveQueryModel = async () => {
+    const v = queryModelDraft.trim()
+    if (!v || v === queryModel) return
     setSavingModel(true)
     try {
-      await api.setQueryModel(modelId)
-      setQueryModel(modelId)
+      await api.setQueryModel(v)
+      setQueryModel(v)
       showToast('Query model updated')
     } catch (e: unknown) {
       showToast((e as Error).message, 'error')
@@ -272,22 +276,27 @@ export default function Admin() {
           <label style={{ display: 'block', fontSize: 13, color: 'var(--text-dim)', margin: '8px 0 4px' }}>
             Ungoverned query model
           </label>
-          <select
-            value={queryModel}
-            onChange={(e) => saveQueryModel(e.target.value)}
-            disabled={savingModel || availableModels.length === 0}
-            style={{ width: '100%', maxWidth: 460, padding: '8px 10px' }}
-          >
-            {/* keep the current value selectable even if not in the list */}
-            {!availableModels.some((m) => m.id === queryModel) && queryModel && (
-              <option value={queryModel}>{queryModel} (current)</option>
-            )}
+          <div style={{ display: 'flex', gap: 8, maxWidth: 460 }}>
+            <input
+              list="query-model-suggestions"
+              value={queryModelDraft}
+              onChange={(e) => setQueryModelDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveQueryModel() }}
+              placeholder="e.g. anthropic.claude-sonnet-4-5-20250929-v1:0"
+              style={{ flex: 1, padding: '8px 10px' }}
+            />
+            <button className="btn btn-primary btn-sm" onClick={saveQueryModel}
+              disabled={savingModel || !queryModelDraft.trim() || queryModelDraft.trim() === queryModel}>
+              {savingModel ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <datalist id="query-model-suggestions">
             {availableModels.map((m) => (
               <option key={m.id} value={m.id}>{m.label}</option>
             ))}
-          </select>
+          </datalist>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
-            {savingModel ? 'Saving…' : <>Active: <code>{queryModel || '—'}</code> · persisted, survives restart</>}
+            Any Converse-capable Bedrock modelId (the account needs access to it). Active: <code>{queryModel || '—'}</code> · persisted, survives restart
           </p>
 
           <label style={{ display: 'block', fontSize: 13, color: 'var(--text-dim)', margin: '16px 0 4px' }}>

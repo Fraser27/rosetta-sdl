@@ -121,7 +121,24 @@ async def discover_data_assets(query: str, limit: int = 20) -> str:
     logger.info(f"discover_data_assets: query='{query}', limit={limit}")
     data = _get("/catalog/search", params={"q": query, "limit": min(limit, 100)})
     if not data:
-        return "No data assets found matching your query."
+        # Distinguish "catalog is empty / not scanned" from "nothing scored above
+        # the relevance threshold" so the caller knows whether to broaden the
+        # query or populate the catalog first.
+        try:
+            has_tables = bool(_get("/catalog/tables"))
+        except Exception:
+            has_tables = True  # don't over-claim emptiness on a lookup failure
+        if has_tables:
+            return (
+                f"No catalog assets scored above the relevance threshold for '{query}'. "
+                "The catalog is not empty — try a broader or differently-worded query "
+                "(e.g. multiple related terms), or use get_table_details/list_metrics "
+                "to browse what exists."
+            )
+        return (
+            "The data catalog is empty — no tables, metrics, or documents have been "
+            "scanned in yet. Run a catalog scan before discovering assets."
+        )
 
     lines = [f"Found {len(data)} results for '{query}':\n"]
     for r in data:

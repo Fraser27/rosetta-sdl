@@ -107,6 +107,15 @@ export interface Metric {
   source?: string;
 }
 
+export interface MetricVersionSummary {
+  version: number;
+  name: string;
+  status: string;
+  updated_by: string;
+  updated_at: string;
+  snapshot_at: string;
+}
+
 export interface DocumentSummary {
   s3_key: string;
   name: string;
@@ -188,6 +197,15 @@ export const api = {
   setMetricStatus: (id: string, status: string) =>
     request<{ ok: boolean; metric_id: string; status: string; version: number }>(
       `/metrics/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
+  listMetricVersions: (id: string) =>
+    request<MetricVersionSummary[]>(`/metrics/${id}/versions`),
+  getMetricVersion: (id: string, version: number) =>
+    request<Metric>(`/metrics/${id}/versions/${version}`),
+  restoreMetricVersion: (id: string, version: number) =>
+    request<{ ok: boolean; restored_from: number; version: number }>(
+      `/metrics/${id}/versions/${version}/restore`, { method: 'POST' }),
+  deleteMetricVersion: (id: string, version: number) =>
+    request<{ ok: boolean }>(`/metrics/${id}/versions/${version}`, { method: 'DELETE' }),
   compileMetric: (id: string) =>
     request<{ metric: string; sql: string; source_table: string }>(`/metrics/${id}/compile`, { method: 'POST' }),
   composeMetrics: (metric_ids: string[], dimensions: string[], limit?: number) =>
