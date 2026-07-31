@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import boto3
 
+from src.constants import DEFAULT_ATHENA_WORKGROUP, DEFAULT_AWS_REGION
 from src.executors.base import (
     BaseExecutor,
     ConnectionTestResult,
@@ -25,10 +27,15 @@ class AthenaExecutor(BaseExecutor):
 
     def __init__(self, datasource_id: str, datasource_name: str, config: dict):
         super().__init__(datasource_id, datasource_name, config)
-        self._workgroup = config.get("endpoint", "primary")
+        self._workgroup = config.get("endpoint") or DEFAULT_ATHENA_WORKGROUP
         self._output_location = config.get("output_location", "")
         self._database = config.get("database")
-        self._region = config.get("region", "us-east-1")
+        self._region = (
+            config.get("region")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or os.environ.get("AWS_REGION")
+            or DEFAULT_AWS_REGION
+        )
         self._client = None
 
     def _get_client(self):
@@ -66,7 +73,7 @@ class AthenaExecutor(BaseExecutor):
         # Poll for completion
         elapsed = 0.0
         wait = 0.5
-        timeout = 30
+        timeout = int(os.environ.get("QUERY_TIMEOUT_SECONDS", "30"))
         while elapsed < timeout:
             status = client.get_query_execution(QueryExecutionId=query_id)
             state = status["QueryExecution"]["Status"]["State"]
@@ -96,6 +103,8 @@ class AthenaExecutor(BaseExecutor):
         columns: list[str] = []
         rows: list[list] = []
 
+        # Fetch one extra row beyond max_rows to detect truncation, then trim.
+        fetch_cap = max_rows + 1
         paginator = client.get_paginator("get_query_results")
         page_count = 0
         for page in paginator.paginate(QueryExecutionId=query_id):
@@ -113,18 +122,24 @@ class AthenaExecutor(BaseExecutor):
                 values = [field.get("VarCharValue", "") for field in row["Data"]]
                 rows.append(values)
 
-                if len(rows) >= max_rows:
+                if len(rows) >= fetch_cap:
                     break
 
             page_count += 1
-            if len(rows) >= max_rows:
+            if len(rows) >= fetch_cap:
                 break
 
+        truncated = len(rows) > max_rows
+        if truncated:
+            rows = rows[:max_rows]
+
         duration_ms = (time.time() - start) * 1000
-        logger.info("Athena query %s completed in %.0fms, %d rows", query_id, duration_ms, len(rows))
+        logger.info("Athena query %s completed in %.0fms, %d rows%s",
+                    query_id, duration_ms, len(rows), " (truncated)" if truncated else "")
 
         return ExecutionResult(
             success=True, columns=columns, rows=rows, row_count=len(rows),
+            truncated=truncated,
             duration_ms=duration_ms, query_execution_id=query_id,
             datasource_id=self.datasource_id,
         )
@@ -191,5 +206,6 @@ class AthenaExecutor(BaseExecutor):
         try:
             result = await self.execute("SELECT 1", max_rows=1)
             return HealthStatus.HEALTHY if result.success else HealthStatus.UNHEALTHY
-        except Exception:
+        except Exception as e:
+            logger.debug("Athena health_check for %s failed: %s", self.datasource_id, e)
             return HealthStatus.UNHEALTHY

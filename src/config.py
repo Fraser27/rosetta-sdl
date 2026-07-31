@@ -8,12 +8,14 @@ from pathlib import Path
 
 import yaml
 
+from src.constants import DEFAULT_ATHENA_WORKGROUP, DEFAULT_AWS_REGION
+
 
 @dataclass
 class Neo4jConfig:
     uri: str = "bolt://localhost:7687"
     user: str = "neo4j"
-    password: str = "semantic-layer"
+    password: str = ""  # no baked-in default; supply via NEO4J_PASSWORD env var
 
 
 @dataclass
@@ -31,7 +33,7 @@ class VectorBucketConfig:
 
 @dataclass
 class AthenaConfig:
-    workgroup: str = "primary"
+    workgroup: str = DEFAULT_ATHENA_WORKGROUP
     output_bucket: str = ""
 
 
@@ -48,6 +50,9 @@ class EmbeddingConfig:
     fulltext_confidence_threshold: float = 1.0  # below this Lucene score, try vector
     vector_min_score: float = 0.6  # minimum cosine similarity to accept
     enabled: bool = True  # kill-switch for vector search
+    # Model used to embed the query before an S3 Vectors kNN search. Configurable
+    # in the UI so it can be matched to whatever the vectors were ingested with.
+    s3vectors_model_id: str = "amazon.titan-embed-text-v2:0"
 
 
 @dataclass
@@ -57,7 +62,7 @@ class DataSourceConfig:
     type: str = "athena"  # "athena" | "redshift_serverless"
     endpoint: str = ""  # workgroup name
     database: str = ""
-    region: str = "us-east-1"
+    region: str = DEFAULT_AWS_REGION
     secret_arn: str = ""
     output_location: str = ""  # S3 output (Athena only)
 

@@ -2,17 +2,29 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api, type TableDetail as TableDetailType } from '../api'
 
+const MAX_DESC_WORDS = 50
+const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length
+
 function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const words = wordCount(draft)
+  const overLimit = words > MAX_DESC_WORDS
 
   const handleSave = async () => {
     if (draft === value) { setEditing(false); return }
+    if (overLimit) { setError(`${words}/${MAX_DESC_WORDS} words — too long`); return }
     setSaving(true)
+    setError('')
     try {
       await onSave(draft)
       setEditing(false)
+    } catch (e: unknown) {
+      // Surface the server-side cap rejection (422) rather than closing silently.
+      setError((e as Error).message.replace(/^\d+:\s*/, ''))
     } finally {
       setSaving(false)
     }
@@ -20,14 +32,14 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => P
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSave()
-    if (e.key === 'Escape') { setDraft(value); setEditing(false) }
+    if (e.key === 'Escape') { setDraft(value); setError(''); setEditing(false) }
   }
 
   if (!editing) {
     return (
       <span
         onClick={() => setEditing(true)}
-        style={{ cursor: 'pointer', color: value ? 'var(--text-dim)' : 'var(--text-dim)', fontSize: 13, borderBottom: '1px dashed var(--border)' }}
+        style={{ cursor: 'pointer', color: 'var(--text-dim)', fontSize: 13, borderBottom: '1px dashed var(--border)' }}
         title="Click to edit"
       >
         {value || 'Click to add description...'}
@@ -36,16 +48,18 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => P
   }
 
   return (
-    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <input
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={handleSave}
         autoFocus
-        style={{ fontSize: 13, padding: '2px 6px', minWidth: 200 }}
+        style={{ fontSize: 13, padding: '2px 6px', minWidth: 240, borderColor: overLimit ? 'var(--red)' : undefined }}
       />
+      <span style={{ fontSize: 11, color: overLimit ? 'var(--red)' : 'var(--text-dim)' }}>{words}/{MAX_DESC_WORDS}</span>
       {saving && <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>saving...</span>}
+      {error && <span style={{ fontSize: 11, color: 'var(--red)' }}>{error}</span>}
     </span>
   )
 }
@@ -92,6 +106,25 @@ export default function TableDetail() {
       }
     })
     showToast(`Column "${colName}" description updated`)
+  }
+
+  const handleToggleDeprecation = async (colName: string, next: boolean) => {
+    if (!name) return
+    try {
+      await api.updateColumnDeprecation(name, colName, next)
+      setTable((t) => {
+        if (!t) return t
+        return {
+          ...t,
+          columns: t.columns.map((c) =>
+            c.name === colName ? { ...c, is_deprecated: next } : c
+          ),
+        }
+      })
+      showToast(`Column "${colName}" ${next ? 'marked deprecated' : 'un-deprecated'}`)
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
   }
 
   if (loading) return <div className="loading"><div className="spinner" /></div>
@@ -150,21 +183,39 @@ export default function TableDetail() {
               <th>Description</th>
               <th>Partition</th>
               <th>Primary Key</th>
+              <th>Status</th>
             </tr>
           </thead>
           <tbody>
             {table.columns.map((c) => (
-              <tr key={c.name}>
-                <td><strong>{c.name}</strong></td>
+              <tr key={c.name} style={c.is_deprecated ? { opacity: 0.6 } : undefined}>
+                <td><strong style={c.is_deprecated ? { textDecoration: 'line-through' } : undefined}>{c.name}</strong></td>
                 <td><code style={{ fontSize: 12 }}>{c.data_type}</code></td>
                 <td>
-                  <InlineEdit
-                    value={c.description || ''}
-                    onSave={(desc) => handleColumnDescSave(c.name, desc)}
-                  />
+                  {c.is_deprecated ? (
+                    // Deprecation takes precedence over the description.
+                    <span style={{ fontSize: 13, color: 'var(--red)' }} title={c.description || undefined}>
+                      Deprecated — avoid using this column
+                    </span>
+                  ) : (
+                    <InlineEdit
+                      value={c.description || ''}
+                      onSave={(desc) => handleColumnDescSave(c.name, desc)}
+                    />
+                  )}
                 </td>
                 <td>{c.is_partition && <span className="tag tag-orange">partition</span>}</td>
                 <td>{c.is_primary_key && <span className="tag tag-green">PK</span>}</td>
+                <td>
+                  {c.is_deprecated ? (
+                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <span className="tag tag-red">deprecated</span>
+                      <button className="btn btn-ghost btn-sm" onClick={() => handleToggleDeprecation(c.name, false)}>Restore</button>
+                    </span>
+                  ) : (
+                    <button className="btn btn-ghost btn-sm" onClick={() => handleToggleDeprecation(c.name, true)}>Deprecate</button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

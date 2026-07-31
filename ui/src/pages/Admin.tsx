@@ -23,6 +23,16 @@ export default function Admin() {
   const [enrichJob, setEnrichJob] = useState<EnrichmentJob | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Ungoverned query-model config
+  const [queryModel, setQueryModel] = useState('')
+  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>([])
+  const [savingModel, setSavingModel] = useState(false)
+
+  // S3 Vectors search embedding-model config
+  const [s3vModel, setS3vModel] = useState('')
+  const [availableEmbedModels, setAvailableEmbedModels] = useState<{ id: string; label: string }[]>([])
+  const [savingS3vModel, setSavingS3vModel] = useState(false)
+
   const checkSampleStatus = () => {
     api.sampleDataStatus().then((s) => {
       setSampleLoaded(s.loaded)
@@ -39,9 +49,43 @@ export default function Admin() {
     api.getConfig().then((cfg) => {
       if (cfg.enrichment_model) setDefaultModel(cfg.enrichment_model as string)
     }).catch(() => {})
+    api.getQueryModel().then((m) => {
+      setQueryModel(m.query_model)
+      setAvailableModels(m.available)
+    }).catch(() => {})
+    api.getS3VectorsModel().then((m) => {
+      setS3vModel(m.s3vectors_model)
+      setAvailableEmbedModels(m.available)
+    }).catch(() => {})
     checkSampleStatus()
     refreshEmbeddingStats()
   }, [])
+
+  const saveS3vModel = async (modelId: string) => {
+    setSavingS3vModel(true)
+    try {
+      await api.setS3VectorsModel(modelId)
+      setS3vModel(modelId)
+      showToast('S3 Vectors search model updated')
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    } finally {
+      setSavingS3vModel(false)
+    }
+  }
+
+  const saveQueryModel = async (modelId: string) => {
+    setSavingModel(true)
+    try {
+      await api.setQueryModel(modelId)
+      setQueryModel(modelId)
+      showToast('Query model updated')
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    } finally {
+      setSavingModel(false)
+    }
+  }
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -198,6 +242,51 @@ export default function Admin() {
       </div>
 
       <div className="admin-actions">
+        <div className="admin-card">
+          <h3>Configurations</h3>
+          <p>Model used for <strong>ungoverned</strong> (LLM-generated) SQL when no governed metric matches. Governed metrics compile deterministically and don't use an LLM.</p>
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--text-dim)', margin: '8px 0 4px' }}>
+            Ungoverned query model
+          </label>
+          <select
+            value={queryModel}
+            onChange={(e) => saveQueryModel(e.target.value)}
+            disabled={savingModel || availableModels.length === 0}
+            style={{ width: '100%', maxWidth: 460, padding: '8px 10px' }}
+          >
+            {/* keep the current value selectable even if not in the list */}
+            {!availableModels.some((m) => m.id === queryModel) && queryModel && (
+              <option value={queryModel}>{queryModel} (current)</option>
+            )}
+            {availableModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
+            {savingModel ? 'Saving…' : <>Active: <code>{queryModel || '—'}</code> · persisted, survives restart</>}
+          </p>
+
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--text-dim)', margin: '16px 0 4px' }}>
+            S3 Vectors search embedding model
+          </label>
+          <select
+            value={s3vModel}
+            onChange={(e) => saveS3vModel(e.target.value)}
+            disabled={savingS3vModel || availableEmbedModels.length === 0}
+            style={{ width: '100%', maxWidth: 460, padding: '8px 10px' }}
+          >
+            {!availableEmbedModels.some((m) => m.id === s3vModel) && s3vModel && (
+              <option value={s3vModel}>{s3vModel} (current)</option>
+            )}
+            {availableEmbedModels.map((m) => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
+            {savingS3vModel ? 'Saving…' : <>Used to embed the question before the vector search. <strong>Must match the model your documents were ingested with</strong>, or scores are meaningless.</>}
+          </p>
+        </div>
+
         <div className="admin-card">
           <h3>Sample Data</h3>
           <p>Load or remove the built-in ecommerce demo dataset (4 tables, 4 metrics, join paths, business terms).</p>

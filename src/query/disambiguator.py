@@ -35,9 +35,12 @@ def disambiguate(
     result = DisambiguationResult()
 
     # 1. Find matching metrics
+    # Governance gate: NL routing only serves APPROVED metrics (legacy metrics with
+    # no status COALESCE to 'approved' for backward compatibility). Draft/deprecated
+    # metrics are still directly queryable by id, just not surfaced to NL questions.
     metric_hits = graph.query(
         "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-        "WHERE score > 0.3 "
+        "WHERE score > 0.3 AND COALESCE(node.status, 'approved') = 'approved' "
         "WITH node AS m, score "
         "MATCH (m)-[:MEASURES]->(t:Table) "
         "RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression, "

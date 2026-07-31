@@ -58,6 +58,7 @@ def load_structured(
                 "description": col.description,
                 "is_partition": col.is_partition,
                 "is_primary_key": col.is_primary_key,
+                "is_deprecated": col.is_deprecated,
             })
             count += 1
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -14,16 +15,23 @@ from src.executors.redshift import RedshiftServerlessExecutor
 from src.executors.registry import registry
 from src.graph.client import GraphClient
 from src.graph.queries import (
+    CASCADE_DISABLE_METRICS,
+    CASCADE_ENABLE_METRICS,
     DELETE_DATASOURCE,
     GET_DATASOURCE,
     GET_METRICS_FOR_DATASOURCE,
     LINK_METRIC_TO_DATASOURCE,
     LIST_DATASOURCES_FULL,
+    SET_DATASOURCE_ENABLED,
     UPSERT_DATASOURCE_FULL,
 )
 from src.health.test_connection import get_job, start_test
 
 logger = logging.getLogger(__name__)
+
+# Sentinel disabled_reason for metrics turned off by a datasource-disable cascade,
+# so re-enabling the datasource restores only these (not individually-disabled ones).
+DATASOURCE_DISABLED_REASON = "datasource_disabled"
 
 router = APIRouter(prefix="/datasources", tags=["datasources"])
 
@@ -47,7 +55,11 @@ def _get_graph() -> GraphClient:
 
 class DataSourceRequest(BaseModel):
     name: str
-    type: str = Field(description="Executor type: 'athena' or 'redshift_serverless'")
+    # Enum-validated at the API boundary: FastAPI returns 422 for unknown types
+    # before any executor is created. Keys must match EXECUTOR_TYPES below.
+    type: Literal["athena", "redshift_serverless"] = Field(
+        description="Executor type: 'athena' or 'redshift_serverless'"
+    )
     endpoint: str = Field(description="Workgroup name")
     database: str = ""
     region: str = "us-east-1"
@@ -96,6 +108,8 @@ async def list_datasources():
     results = graph.query(LIST_DATASOURCES_FULL)
     datasources = []
     for r in results:
+        # SECURITY: never surface r["secret_arn"] — it is intentionally omitted
+        # from the response dict below (queries return it for internal use only).
         ds = {
             "datasource_id": r["datasource_id"],
             "name": r["name"],
@@ -174,6 +188,8 @@ async def get_datasource(datasource_id: str):
     if not results:
         raise HTTPException(404, f"Datasource '{datasource_id}' not found")
     r = results[0]
+    # SECURITY: never surface r["secret_arn"] — intentionally omitted from the
+    # response dict below (the query returns it for internal use only).
     return {
         "datasource_id": r["datasource_id"],
         "name": r["name"],
@@ -200,6 +216,13 @@ async def update_datasource(datasource_id: str, request: DataSourceRequest):
         raise HTTPException(404, f"Datasource '{datasource_id}' not found")
 
     now = datetime.now(timezone.utc).isoformat()
+    # Preserve the stored secret when the client omits it or leaves it blank
+    # (the secret is never returned to the client, so a blank field on edit
+    # means "keep existing", not "clear it").
+    if "secret_arn" in request.model_fields_set and request.secret_arn:
+        secret_arn = request.secret_arn
+    else:
+        secret_arn = results[0].get("secret_arn")
     graph.write(UPSERT_DATASOURCE_FULL, {
         "datasource_id": datasource_id,
         "name": request.name,
@@ -207,7 +230,7 @@ async def update_datasource(datasource_id: str, request: DataSourceRequest):
         "endpoint": request.endpoint,
         "database": request.database,
         "region": request.region,
-        "secret_arn": request.secret_arn,
+        "secret_arn": secret_arn,
         "status": results[0].get("status", "unknown"),
         "enabled": results[0].get("enabled", True),
         "created_at": results[0].get("created_at", now),
@@ -220,12 +243,45 @@ async def update_datasource(datasource_id: str, request: DataSourceRequest):
         "endpoint": request.endpoint,
         "database": request.database,
         "region": request.region,
-        "secret_arn": request.secret_arn,
+        "secret_arn": secret_arn,
         "output_location": request.output_location or "",
     }
     _create_executor(datasource_id, request.name, request.type, config)
 
     return {"ok": True, "datasource_id": datasource_id}
+
+
+class EnabledUpdate(BaseModel):
+    enabled: bool
+
+
+@router.patch("/{datasource_id}/enabled")
+async def set_datasource_enabled(datasource_id: str, req: EnabledUpdate):
+    """Enable or disable a datasource, cascading to its metrics.
+
+    Disabling turns off every currently-enabled metric on this datasource and
+    tags them with a sentinel reason. Re-enabling restores ONLY those metrics
+    (metrics disabled individually for other reasons stay off).
+    """
+    graph = _get_graph()
+    existing = graph.query(GET_DATASOURCE, {"datasource_id": datasource_id})
+    if not existing:
+        raise HTTPException(404, f"Datasource '{datasource_id}' not found")
+
+    graph.write(SET_DATASOURCE_ENABLED, {"datasource_id": datasource_id, "enabled": req.enabled})
+
+    cascade_query = CASCADE_ENABLE_METRICS if req.enabled else CASCADE_DISABLE_METRICS
+    rows = graph.query(cascade_query, {
+        "datasource_id": datasource_id,
+        "reason": DATASOURCE_DISABLED_REASON,
+    })
+    affected = rows[0]["affected"] if rows else 0
+    logger.info(
+        "Datasource %s %s — %d metric(s) %s",
+        datasource_id, "enabled" if req.enabled else "disabled",
+        affected, "restored" if req.enabled else "disabled",
+    )
+    return {"ok": True, "datasource_id": datasource_id, "enabled": req.enabled, "metrics_affected": affected}
 
 
 @router.delete("/{datasource_id}")

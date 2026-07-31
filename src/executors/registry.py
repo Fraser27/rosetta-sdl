@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from src.constants import DEFAULT_DATASOURCE_ID
+
 if TYPE_CHECKING:
     from src.executors.base import BaseExecutor
 
@@ -39,11 +41,11 @@ class ExecutorRegistry:
     def default_athena_id(self) -> str:
         """Return the datasource_id of the Athena executor that owns Glue-scanned tables.
 
-        Prefers the conventional 'ds_default_athena', else the first registered
+        Prefers the conventional DEFAULT_DATASOURCE_ID, else the first registered
         athena executor, else '' when none exists.
         """
-        if "ds_default_athena" in self._executors:
-            return "ds_default_athena"
+        if DEFAULT_DATASOURCE_ID in self._executors:
+            return DEFAULT_DATASOURCE_ID
         for ds_id, ex in self._executors.items():
             if getattr(ex, "datasource_type", "") == "athena":
                 return ds_id

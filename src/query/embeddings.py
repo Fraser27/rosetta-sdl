@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import boto3
 
+from src.text_utils import retry_bedrock
+
 logger = logging.getLogger(__name__)
 
 # Lazy-initialized Bedrock client (reused across calls)
@@ -32,12 +34,12 @@ def get_embedding(
     """
     try:
         client = _get_bedrock_client()
-        response = client.invoke_model(
+        response = retry_bedrock(lambda: client.invoke_model(
             modelId=model_id,
             contentType="application/json",
             accept="application/json",
             body=json.dumps({"inputText": text, "dimensions": dimensions}),
-        )
+        ))
         result = json.loads(response["body"].read())
         return result.get("embedding", [])
     except Exception as e:

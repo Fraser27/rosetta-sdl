@@ -11,6 +11,7 @@ class ColumnMeta(BaseModel):
     description: str = ""
     is_partition: bool = False
     is_primary_key: bool = False
+    is_deprecated: bool = False
 
 
 class TableMeta(BaseModel):
@@ -62,6 +63,16 @@ class MetricDefinition(BaseModel):
     grain: list[str] = Field(default_factory=list)
     parameters: list[MetricParameter] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
+    # additive: safe to sum across every dimension (SUM of a flow like revenue).
+    # semi_additive: additive across all dimensions EXCEPT time (a point-in-time
+    #   snapshot like balance/inventory — summing across time double-counts).
+    # non_additive: cannot be summed across any dimension (AVG, ratio, distinct count);
+    #   only meaningful when recomputed from base rows at the target grain.
+    aggregation: str = "additive"  # additive | semi_additive | non_additive
+    # Presentation/semantics for downstream consumers (formatting + sanity checks).
+    value_type: str = "number"  # number | currency | percent | ratio | count | duration
+    unit: str = ""  # free-form unit label, e.g. "USD", "orders", "ms"
+    format: str = ""  # optional display format hint, e.g. "$#,##0.00", "0.0%"
     owner: str = ""
 
 
@@ -99,6 +110,15 @@ class MetricSummary(BaseModel):
     base_metrics: list[str] | None = Field(default_factory=list)
     synonyms: list[str] | None = Field(default_factory=list)
     grain: list[str] | None = Field(default_factory=list)
+    time_grains: list[str] | None = Field(default_factory=list)
+    aggregation: str = "additive"  # additive | semi_additive | non_additive
+    value_type: str = "number"
+    unit: str = ""
+    format: str = ""
+    status: str = "approved"  # draft | approved | deprecated
+    version: int = 1
+    updated_by: str = ""
+    updated_at: str = ""
     parameters: list[MetricParameter] = Field(default_factory=list)
     source: str = "user"  # user | sample | yaml
 

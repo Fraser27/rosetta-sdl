@@ -26,6 +26,9 @@ neo4j_data/
 .env
 .env.local
 
+# Local-only compose overrides (may reference credentials)
+docker-compose.override.yml
+
 # Secrets / local MCP proxy
 agentcore/mcp-proxy.mjs
 

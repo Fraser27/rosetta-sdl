@@ -7,8 +7,10 @@ import logging
 
 import boto3
 
+from src.constants import BEDROCK_ANTHROPIC_VERSION
 from src.graph.client import GraphClient
 from src.query.disambiguator import DisambiguationResult
+from src.text_utils import extract_sql, retry_bedrock
 
 logger = logging.getLogger(__name__)
 
@@ -50,27 +52,24 @@ def generate_sql(
     )
 
     bedrock = boto3.client("bedrock-runtime")
-    response = bedrock.invoke_model(
+    response = retry_bedrock(lambda: bedrock.invoke_model(
         modelId=model_id,
         contentType="application/json",
         accept="application/json",
         body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
+            "anthropic_version": BEDROCK_ANTHROPIC_VERSION,
             "max_tokens": 1024,
             "messages": [{"role": "user", "content": prompt}],
         }),
-    )
+    ))
     result = json.loads(response["body"].read())
-    text = result["content"][0]["text"].strip()
+    text = result["content"][0]["text"]
 
-    # Extract SQL from potential markdown code blocks
-    if "```sql" in text:
-        text = text.split("```sql")[1].split("```")[0].strip()
-    elif "```" in text:
-        text = text.split("```")[1].split("```")[0].strip()
+    # Robustly extract SQL (handles fenced ```sql, generic ```, or bare SQL).
+    sql = extract_sql(text)
 
     logger.info("Generated SQL for question: %s", question[:80])
-    return text
+    return sql
 
 
 def _build_schema_context(tables: list[str], graph: GraphClient) -> str:
@@ -79,15 +78,22 @@ def _build_schema_context(tables: list[str], graph: GraphClient) -> str:
     for table_name in tables:
         results = graph.query(
             "MATCH (t:Table {full_name: $fn})-[:HAS_COLUMN]->(c:Column) "
-            "RETURN c.name AS name, c.data_type AS type, c.description AS desc "
+            "RETURN c.name AS name, c.data_type AS type, c.description AS desc, "
+            "coalesce(c.is_deprecated, false) AS deprecated "
             "ORDER BY c.name",
             {"fn": table_name},
         )
         if results:
-            cols = ", ".join(
-                f"{r['name']} ({r['type']})" + (f" -- {r['desc']}" if r.get("desc") else "")
-                for r in results
-            )
-            parts.append(f"  {table_name}: {cols}")
+            # A deprecated column's marker takes precedence over its description
+            # so the model is steered away from selecting it.
+            col_strs = []
+            for r in results:
+                s = f"{r['name']} ({r['type']})"
+                if r.get("deprecated"):
+                    s += " -- DEPRECATED: avoid using this column"
+                elif r.get("desc"):
+                    s += f" -- {r['desc']}"
+                col_strs.append(s)
+            parts.append(f"  {table_name}: {', '.join(col_strs)}")
 
     return "\n".join(parts) if parts else "  No tables found"

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 
 import boto3
 
+from src.constants import DEFAULT_AWS_REGION
 from src.executors.base import (
     BaseExecutor,
     ConnectionTestResult,
@@ -27,7 +29,12 @@ class RedshiftServerlessExecutor(BaseExecutor):
         super().__init__(datasource_id, datasource_name, config)
         self._workgroup = config.get("endpoint", "")
         self._database = config.get("database", "")
-        self._region = config.get("region", "us-east-1")
+        self._region = (
+            config.get("region")
+            or os.environ.get("AWS_DEFAULT_REGION")
+            or os.environ.get("AWS_REGION")
+            or DEFAULT_AWS_REGION
+        )
         self._secret_arn = config.get("secret_arn")
         self._client = None
 
@@ -47,8 +54,10 @@ class RedshiftServerlessExecutor(BaseExecutor):
             params["SecretArn"] = self._secret_arn
         return params
 
-    def _poll_statement(self, statement_id: str, timeout: int = 30) -> dict:
+    def _poll_statement(self, statement_id: str, timeout: int | None = None) -> dict:
         """Poll until statement completes or times out."""
+        if timeout is None:
+            timeout = int(os.environ.get("QUERY_TIMEOUT_SECONDS", "30"))
         client = self._get_client()
         elapsed = 0.0
         wait = 0.5
@@ -114,7 +123,8 @@ class RedshiftServerlessExecutor(BaseExecutor):
                     datasource_id=self.datasource_id,
                 )
 
-            # Paginate results
+            # Fetch one extra row beyond max_rows to detect truncation, then trim.
+            fetch_cap = max_rows + 1
             paginator = client.get_paginator("get_statement_result")
             page_count = 0
             for page in paginator.paginate(Id=statement_id):
@@ -141,11 +151,11 @@ class RedshiftServerlessExecutor(BaseExecutor):
                             row.append("")
                     rows.append(row)
 
-                    if len(rows) >= max_rows:
+                    if len(rows) >= fetch_cap:
                         break
 
                 page_count += 1
-                if len(rows) >= max_rows:
+                if len(rows) >= fetch_cap:
                     break
 
         except Exception as e:
@@ -155,11 +165,17 @@ class RedshiftServerlessExecutor(BaseExecutor):
                 duration_ms=(time.time() - start) * 1000,
             )
 
+        truncated = len(rows) > max_rows
+        if truncated:
+            rows = rows[:max_rows]
+
         duration_ms = (time.time() - start) * 1000
-        logger.info("Redshift query %s completed in %.0fms, %d rows", statement_id, duration_ms, len(rows))
+        logger.info("Redshift query %s completed in %.0fms, %d rows%s",
+                    statement_id, duration_ms, len(rows), " (truncated)" if truncated else "")
 
         return ExecutionResult(
             success=True, columns=columns, rows=rows, row_count=len(rows),
+            truncated=truncated,
             duration_ms=duration_ms, query_execution_id=statement_id,
             datasource_id=self.datasource_id,
         )
@@ -244,5 +260,6 @@ class RedshiftServerlessExecutor(BaseExecutor):
         try:
             result = await self.execute("SELECT 1", max_rows=1)
             return HealthStatus.HEALTHY if result.success else HealthStatus.UNHEALTHY
-        except Exception:
+        except Exception as e:
+            logger.debug("Redshift health_check for %s failed: %s", self.datasource_id, e)
             return HealthStatus.UNHEALTHY

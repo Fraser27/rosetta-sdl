@@ -8,6 +8,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.config import SemanticLayerConfig
+from src.constants import (
+    AVAILABLE_EMBEDDING_MODELS,
+    AVAILABLE_QUERY_MODELS,
+    SYSTEM_CONFIG_KEY,
+)
+from src.graph import queries
 from src.discovery.enrichment import (
     enrich_documents,
     enrich_tables,
@@ -312,3 +318,73 @@ async def get_config():
             "vector_min_score": _config.embedding.vector_min_score,
         },
     }
+
+
+@router.get("/config/query-model")
+async def get_query_model():
+    """Return the current ungoverned-query LLM model and the selectable options."""
+    return {
+        "query_model": _config.bedrock.query_model,
+        "available": AVAILABLE_QUERY_MODELS,
+    }
+
+
+class QueryModelUpdate(BaseModel):
+    query_model: str
+
+
+@router.put("/config/query-model")
+async def set_query_model(req: QueryModelUpdate):
+    """Set the LLM model used for ungoverned (LLM-generated) SQL.
+
+    Persists to Neo4j (survives restart) and mutates the shared in-memory config
+    so it takes effect immediately for subsequent queries.
+    """
+    model_id = req.query_model.strip()
+    allowed_ids = {m["id"] for m in AVAILABLE_QUERY_MODELS}
+    if model_id not in allowed_ids:
+        raise HTTPException(400, f"Unknown model '{model_id}'. Choose one of the available models.")
+
+    # Persist (Neo4j) then apply in-memory. _config is shared by reference across
+    # routers, so routes_query sees the new value on the next request.
+    _get_graph().write(queries.UPSERT_SYSTEM_CONFIG, {
+        "key": SYSTEM_CONFIG_KEY,
+        "query_model": model_id,
+    })
+    _config.bedrock.query_model = model_id
+    logger.info("Ungoverned query model set to %s", model_id)
+    return {"ok": True, "query_model": model_id}
+
+
+@router.get("/config/s3vectors-model")
+async def get_s3vectors_model():
+    """Return the current S3 Vectors search embedding model and the options."""
+    return {
+        "s3vectors_model": _config.embedding.s3vectors_model_id,
+        "available": AVAILABLE_EMBEDDING_MODELS,
+    }
+
+
+class S3VectorsModelUpdate(BaseModel):
+    s3vectors_model: str
+
+
+@router.put("/config/s3vectors-model")
+async def set_s3vectors_model(req: S3VectorsModelUpdate):
+    """Set the embedding model used to embed queries before S3 Vectors search.
+
+    Persists to Neo4j and mutates the shared in-memory config. Should match the
+    model the vectors were ingested with, or similarity scores are meaningless.
+    """
+    model_id = req.s3vectors_model.strip()
+    allowed_ids = {m["id"] for m in AVAILABLE_EMBEDDING_MODELS}
+    if model_id not in allowed_ids:
+        raise HTTPException(400, f"Unknown embedding model '{model_id}'. Choose one of the available models.")
+
+    _get_graph().write(queries.UPSERT_S3VECTORS_EMBEDDING_MODEL, {
+        "key": SYSTEM_CONFIG_KEY,
+        "s3vectors_embedding_model": model_id,
+    })
+    _config.embedding.s3vectors_model_id = model_id
+    logger.info("S3 Vectors embedding model set to %s", model_id)
+    return {"ok": True, "s3vectors_model": model_id}

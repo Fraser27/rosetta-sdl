@@ -21,6 +21,7 @@ class ExecutionResult:
     columns: list[str] = field(default_factory=list)
     rows: list[list] = field(default_factory=list)
     row_count: int = 0
+    truncated: bool = False  # True when the row cap was hit and more rows may exist
     duration_ms: float = 0.0
     query_execution_id: str = ""
     error: str | None = None

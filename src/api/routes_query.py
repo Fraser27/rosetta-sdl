@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from src.audit import record_query, user_from_request
 from src.catalog.models import QueryPlan, QueryResponse
 from src.config import SemanticLayerConfig
+from src.constants import DEFAULT_DATASOURCE_ID
 from src.executors.base import HealthStatus
 from src.executors.registry import registry
 from src.graph.client import GraphClient
 from src.metrics.compiler import compile_metric, compose_metrics, FilterClause as CompilerFilter
-from src.query.athena_executor import execute_query as athena_execute_query
+from src.query.athena_executor import execute_query, execute_query as athena_execute_query
 from src.query.disambiguator import disambiguate
 from src.query.firewall import SQLFirewall
 from src.query.generator import generate_sql
@@ -59,7 +62,7 @@ class SQLQueryRequest(BaseModel):
 
 
 @router.post("/natural-language", response_model=QueryResponse)
-async def natural_language_query(request: NLQueryRequest):
+async def natural_language_query(request: NLQueryRequest, http_request: Request):
     """Full natural language query pipeline.
 
     1. Route (graph-based: structured, unstructured, or both)
@@ -67,6 +70,7 @@ async def natural_language_query(request: NLQueryRequest):
     3. For unstructured: search S3 Vectors
     """
     graph = _get_graph()
+    user = user_from_request(http_request)
 
     # 1. Route the query
     route_result = route_query(request.question, graph, embedding_config=_config.embedding)
@@ -80,51 +84,87 @@ async def natural_language_query(request: NLQueryRequest):
         for f in request.filters
     ] if request.filters else None
 
-    # 2. Handle structured path
-    if route_result.route in ("structured", "both"):
-        try:
-            sql_result = await _handle_structured(
-                request.question, route_result, graph,
-                workgroup=workgroup, filters=filter_clauses,
-                dimensions=request.dimensions or None,
-            )
+    want_structured = route_result.route in ("structured", "both")
+    want_unstructured = route_result.route in ("unstructured", "both")
+
+    # Run the structured (SQL) and unstructured (vector) paths CONCURRENTLY for
+    # 'both'. The vector search is sync/blocking boto3, so offload it to a thread;
+    # return_exceptions keeps one path's failure from cancelling the other.
+    structured_coro = (
+        _handle_structured(
+            request.question, route_result, graph,
+            workgroup=workgroup, filters=filter_clauses,
+            dimensions=request.dimensions or None,
+        ) if want_structured else _noop()
+    )
+    unstructured_coro = (
+        asyncio.to_thread(
+            search_vectors, request.question, graph,
+            model_id=_config.embedding.s3vectors_model_id,
+        ) if want_unstructured else _noop()
+    )
+    sql_result, vector_results = await asyncio.gather(
+        structured_coro, unstructured_coro, return_exceptions=True,
+    )
+
+    # 2. Apply structured result
+    if want_structured:
+        if isinstance(sql_result, Exception):
+            logger.error("Structured query failed: %s", sql_result)
+            response.error = str(sql_result)
+            record_query(action="nl_query", user=user, query_type="", sql="", error=str(sql_result))
+        else:
             response.intent = sql_result.get("intent", "analytical")
             response.query_type = sql_result.get("query_type", "ungoverned")
             response.metric_name = sql_result.get("metric_name")
             response.sql = sql_result.get("sql")
             response.results = sql_result.get("results")
-        except Exception as e:
-            logger.error("Structured query failed: %s", e)
-            response.error = str(e)
+            _results = sql_result.get("results") or {}
+            record_query(
+                action="nl_query", user=user, query_type=response.query_type or "",
+                metric_id=sql_result.get("metric_id", ""),
+                datasource_id=sql_result.get("datasource_id", ""),
+                sql=response.sql or "", firewall_verdict="allowed",
+                row_count=int(_results.get("row_count") or 0),
+                duration_ms=int(_results.get("duration_ms") or 0),
+                error=str(_results.get("error") or ""),
+            )
 
-    # 3. Handle unstructured path
-    if route_result.route in ("unstructured", "both"):
-        try:
-            vector_results = search_vectors(request.question, graph)
+    # 3. Apply unstructured result
+    if want_unstructured:
+        if isinstance(vector_results, Exception):
+            logger.error("Vector search failed: %s", vector_results)
+            if not response.error:
+                response.error = str(vector_results)
+        else:
             response.vector_results = vector_results
             if not response.intent:
                 response.intent = "document"
                 response.query_type = "document"
-        except Exception as e:
-            logger.error("Vector search failed: %s", e)
-            if not response.error:
-                response.error = str(e)
 
     return response
 
 
-def _resolve_executor_for_metric(metric_id: str, graph: GraphClient):
-    """Resolve the executor for a metric via its EXECUTES_ON relationship."""
+async def _noop():
+    """Placeholder coroutine for a route path that isn't taken."""
+    return None
+
+
+def _resolve_datasource_id_for_metric(metric_id: str, graph: GraphClient) -> str:
+    """Resolve the datasource_id a metric executes on, or the default."""
     results = graph.query(
         "MATCH (m:Metric {metric_id: $mid})-[:EXECUTES_ON]->(ds:DataSource) "
         "RETURN ds.datasource_id AS datasource_id",
         {"mid": metric_id},
     )
     if results:
-        ds_id = results[0]["datasource_id"]
-        return registry.get(ds_id)
-    # Fallback to default Athena
-    return registry.get("ds_default_athena")
+        return results[0]["datasource_id"]
+    return DEFAULT_DATASOURCE_ID
+
+
+def _resolve_executor_for_metric(metric_id: str, graph: GraphClient):
+    """Resolve the executor for a metric via its EXECUTES_ON relationship."""
+    return registry.get(_resolve_datasource_id_for_metric(metric_id, graph))
 
 
 async def _execute_on_datasource(sql: str, metric_id: str | None, graph: GraphClient, max_rows: int) -> dict:
@@ -151,6 +191,84 @@ async def _execute_on_datasource(sql: str, metric_id: str | None, graph: GraphCl
             output_location=_config.athena.output_bucket,
             max_rows=max_rows,
         )
+
+
+def _tables_in_sql(sql: str) -> list[str]:
+    """Extract fully-qualified table references from SQL via sqlglot (Trino).
+
+    Mirrors the firewall's extraction so datasource binding agrees with what the
+    firewall validates. CTE names are excluded (internal aliases, not real tables).
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    try:
+        parsed = sqlglot.parse(sql, dialect="trino")
+    except sqlglot.errors.ParseError:
+        return []
+    tables: list[str] = []
+    for statement in parsed:
+        if statement is None:
+            continue
+        cte_names = {
+            cte.alias_or_name.lower()
+            for cte in statement.find_all(exp.CTE)
+            if cte.alias_or_name
+        }
+        for t in statement.find_all(exp.Table):
+            if not t.catalog and not t.db and t.name.lower() in cte_names:
+                continue
+            parts = [p for p in (t.catalog, t.db, t.name) if p]
+            tables.append(".".join(parts))
+    return tables
+
+
+def _resolve_datasource_for_sql(sql: str, graph: GraphClient) -> str | None:
+    """Deterministically resolve the datasource for ungoverned SQL from its tables.
+
+    Returns a single datasource_id when all tagged tables agree; None when every
+    referenced table is untagged (→ caller uses the Athena default). Raises 400 if
+    the referenced tables span multiple datasources (a single query can't run
+    cross-engine). The LLM never chooses the engine — this is derived from the graph.
+    """
+    tables = _tables_in_sql(sql)
+    found: set[str] = set()
+    for full_name in tables:
+        rows = graph.query(
+            "MATCH (t:Table {full_name: $fn}) RETURN t.datasource_id AS ds",
+            {"fn": full_name},
+        )
+        ds = rows[0]["ds"] if rows and rows[0].get("ds") else None
+        if ds:
+            found.add(ds)
+    if len(found) > 1:
+        raise HTTPException(
+            400,
+            f"Generated query references tables across multiple datasources {sorted(found)}; "
+            f"a single query cannot run cross-engine.",
+        )
+    return next(iter(found)) if found else None
+
+
+async def _execute_ungoverned(sql: str, datasource_id: str | None, wg: str | None, max_rows: int) -> dict:
+    """Execute ungoverned SQL on the resolved datasource's executor, else Athena default."""
+    executor = registry.get(datasource_id) if datasource_id else None
+    if executor:
+        result = await executor.execute(sql, max_rows=max_rows)
+        return {
+            "columns": result.columns,
+            "rows": result.rows,
+            "row_count": result.row_count,
+            "duration_ms": result.duration_ms,
+            "query_execution_id": result.query_execution_id,
+            "error": result.error,
+        }
+    return athena_execute_query(
+        sql=sql,
+        workgroup=wg or _config.athena.workgroup,
+        output_location=_config.athena.output_bucket,
+        max_rows=max_rows,
+    )
 
 
 async def _handle_structured(
@@ -197,6 +315,8 @@ async def _handle_structured(
                 "intent": "metric",
                 "query_type": "governed",
                 "metric_name": compiled.metric_name,
+                "metric_id": best_metric["metric_id"],
+                "datasource_id": _resolve_datasource_id_for_metric(best_metric["metric_id"], graph),
                 "sql": compiled.sql,
                 "results": result,
             }
@@ -210,28 +330,33 @@ async def _handle_structured(
         if not fw.allowed:
             raise HTTPException(403, fw.reason)
 
-    # For ungoverned queries, use legacy Athena executor (no datasource binding)
-    result = athena_execute_query(
-        sql=sql,
-        workgroup=wg,
-        output_location=_config.athena.output_bucket,
-        max_rows=_config.max_query_rows,
-    )
+    # Ungoverned SQL is still bound to the correct engine: resolve the datasource
+    # deterministically from the tables the generated SQL references (the LLM never
+    # picks an engine). Single datasource → run there; multiple → reject; untagged
+    # → legacy Athena default.
+    resolved_ds = _resolve_datasource_for_sql(sql, graph)
+    result = await _execute_ungoverned(sql, resolved_ds, wg, _config.max_query_rows)
     return {
         "intent": "analytical",
         "query_type": "ungoverned",
+        "datasource_id": resolved_ds or "",
         "sql": sql,
         "results": result,
     }
 
 
 @router.post("/sql")
-async def direct_sql_query(request: SQLQueryRequest):
+async def direct_sql_query(request: SQLQueryRequest, http_request: Request):
     """Execute a direct SQL query (with firewall validation)."""
+    user = user_from_request(http_request)
     # Firewall check
     if _firewall:
         fw = _firewall.validate(request.sql)
         if not fw.allowed:
+            record_query(
+                action="direct_sql", user=user, query_type="ungoverned",
+                sql=request.sql, firewall_verdict="blocked", error=fw.reason,
+            )
             raise HTTPException(403, fw.reason)
 
     result = execute_query(
@@ -241,6 +366,13 @@ async def direct_sql_query(request: SQLQueryRequest):
         database=request.database,
         catalog=request.catalog,
         max_rows=request.max_rows,
+    )
+    record_query(
+        action="direct_sql", user=user, query_type="ungoverned",
+        sql=request.sql, firewall_verdict="allowed",
+        row_count=int(result.get("row_count") or 0),
+        duration_ms=int(result.get("duration_ms") or 0),
+        error=str(result.get("error") or ""),
     )
     return {"sql": request.sql, "results": result}
 
@@ -415,9 +547,10 @@ class ComposeRequest(BaseModel):
 
 
 @router.post("/compose")
-async def compose_metrics_endpoint(request: ComposeRequest):
+async def compose_metrics_endpoint(request: ComposeRequest, http_request: Request):
     """Compose multiple governed metrics into a CTE query, optionally execute it."""
     graph = _get_graph()
+    user = user_from_request(http_request)
 
     if len(request.metric_ids) < 2:
         raise HTTPException(400, "At least 2 metric IDs required for composition")
@@ -449,15 +582,35 @@ async def compose_metrics_endpoint(request: ComposeRequest):
         "metric": compiled.metric_name,
         "sql": compiled.sql,
         "query_type": "governed",
+        "datasource_id": _resolve_datasource_id_for_metric(request.metric_ids[0], graph),
+        "warnings": compiled.warnings,
     }
 
     if request.execute:
-        result = execute_query(
-            sql=compiled.sql,
-            workgroup=request.workgroup or _config.athena.workgroup,
-            output_location=_config.athena.output_bucket,
-            max_rows=request.limit or _config.max_query_rows,
+        # Route through the datasource-aware executor, resolving from the first
+        # base metric (all base metrics in a valid composition share a datasource).
+        result = await _execute_on_datasource(
+            compiled.sql,
+            request.metric_ids[0],
+            graph,
+            request.limit or _config.max_query_rows,
         )
         response["results"] = result
+        record_query(
+            action="compose", user=user, query_type="governed",
+            metric_id=",".join(request.metric_ids),
+            datasource_id=response["datasource_id"], sql=compiled.sql,
+            firewall_verdict="allowed",
+            row_count=int((result or {}).get("row_count") or 0),
+            duration_ms=int((result or {}).get("duration_ms") or 0),
+            error=str((result or {}).get("error") or ""),
+        )
+    else:
+        record_query(
+            action="compose", user=user, query_type="governed",
+            metric_id=",".join(request.metric_ids),
+            datasource_id=response["datasource_id"], sql=compiled.sql,
+            firewall_verdict="allowed",
+        )
 
     return response

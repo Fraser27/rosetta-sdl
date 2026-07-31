@@ -120,7 +120,14 @@ export default function Datasources() {
   const handleSave = async () => {
     try {
       if (editingId) {
-        await api.updateDatasource(editingId, form)
+        // On edit, a blank Secret ARN means "keep the existing secret" — the
+        // frontend never receives the stored secret_arn, so we must NOT send it
+        // as blank/null (that would wipe it). Omit the key entirely when blank.
+        const payload: DataSourceRequest = { ...form }
+        if (!payload.secret_arn) {
+          delete payload.secret_arn
+        }
+        await api.updateDatasource(editingId, payload)
       } else {
         await api.createDatasource(form)
       }
@@ -143,9 +150,27 @@ export default function Datasources() {
     }
   }
 
+  const handleToggleEnabled = async (ds: DataSource) => {
+    const next = !ds.enabled
+    if (!next && !confirm(`Disable "${ds.name}"? This will also disable all metrics that run on it.`)) return
+    try {
+      const res = await api.setDatasourceEnabled(ds.datasource_id, next)
+      await load()
+      setError('')
+      // surface how many metrics were affected via the transient error banner slot
+      console.log(`${next ? 'Enabled' : 'Disabled'} ${ds.name}: ${res.metrics_affected} metric(s) affected`)
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
   const handleEdit = (ds: DataSource) => {
     setEditingId(ds.datasource_id)
+    // secret_arn is intentionally left blank: the backend never returns the
+    // stored secret. A blank field on edit means "keep the existing secret"
+    // (see handleSave, which omits secret_arn when blank during edit).
     setForm({ name: ds.name, type: ds.type, endpoint: ds.endpoint, database: ds.database, region: ds.region })
+    setError('')
     setShowForm(true)
   }
 
@@ -190,13 +215,16 @@ export default function Datasources() {
       ) : (
         <div className="ds-grid">
           {datasources.map(ds => (
-            <div key={ds.datasource_id} className="card ds-card">
+            <div key={ds.datasource_id} className="card ds-card" style={ds.enabled ? undefined : { opacity: 0.6 }}>
               <div className="ds-card-top">
                 <div className="ds-card-title">
                   <StatusDot status={ds.status} />
                   <strong>{ds.name}</strong>
                 </div>
-                <span className={`tag ${statusTag(ds.status)}`}>{typeLabel(ds.type)}</span>
+                <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                  {!ds.enabled && <span className="tag tag-red">disabled</span>}
+                  <span className={`tag ${statusTag(ds.status)}`}>{typeLabel(ds.type)}</span>
+                </span>
               </div>
 
               <dl className="ds-meta">
@@ -218,6 +246,9 @@ export default function Datasources() {
               <div className="ds-actions">
                 <button className="btn btn-ghost btn-sm" onClick={() => setTestingId(ds.datasource_id)}>Test</button>
                 <button className="btn btn-ghost btn-sm" onClick={() => handleEdit(ds)}>Edit</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => handleToggleEnabled(ds)}>
+                  {ds.enabled ? 'Disable' : 'Enable'}
+                </button>
                 <button className="btn btn-danger btn-sm" onClick={() => handleDelete(ds.datasource_id)}>Delete</button>
               </div>
             </div>
@@ -275,9 +306,9 @@ export default function Datasources() {
 
             <div className="form-group">
               <label>
-                Secret ARN <span className="form-hint">optional — for password auth via Secrets Manager</span>
+                Secret ARN <span className="form-hint">{editingId ? 'leave blank to keep the existing secret' : 'optional — for password auth via Secrets Manager'}</span>
               </label>
-              <input value={form.secret_arn || ''} onChange={e => setForm({ ...form, secret_arn: e.target.value || null })} placeholder="arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret" />
+              <input value={form.secret_arn || ''} onChange={e => setForm({ ...form, secret_arn: e.target.value || null })} placeholder={editingId ? 'unchanged — leave blank to keep existing' : 'arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret'} />
             </div>
 
             <div className="modal-actions">

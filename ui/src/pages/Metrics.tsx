@@ -9,6 +9,8 @@ interface JoinRow {
   join_type: string
 }
 
+const DEFAULT_DATASOURCE_ID = 'ds_default_athena'
+
 const emptyJoin: JoinRow = { table: '', source_column: '', target_column: '', join_type: 'INNER' }
 
 interface ParameterRow {
@@ -34,17 +36,35 @@ interface MetricForm {
   base_metrics: string[]
   synonyms: string
   grain: string
+  time_grains: string
+  aggregation: string
+  value_type: string
+  unit: string
+  format: string
   filters: string
 }
 
 const emptyForm: MetricForm = {
   metric_id: '', name: '', definition: '', expression: '',
   type: 'simple', source_db: '', source_table: '', datasource_id: '', joins: [], parameters: [],
-  base_metrics: [], synonyms: '', grain: '', filters: '',
+  base_metrics: [], synonyms: '', grain: '', time_grains: '', aggregation: 'additive',
+  value_type: 'number', unit: '', format: '', filters: '',
 }
 
-function toForm(m: Metric): MetricForm {
-  const sourceDb = m.source_table ? m.source_table.split('.')[0] || '' : ''
+// Derive the database for a metric's source table. Prefer the authoritative
+// `database` field of the matching loaded table (handles catalog.db.table and
+// bare names correctly); fall back to a split only when no table matches.
+function deriveSourceDb(sourceTable: string, tables: TableSummary[]): string {
+  if (!sourceTable) return ''
+  const match = tables.find((t) => t.full_name === sourceTable)
+  if (match) return match.database
+  const parts = sourceTable.split('.')
+  // For a.b -> "a"; a.b.c -> "a.b"; bare "table" (no dot) -> "".
+  return parts.length > 1 ? parts.slice(0, -1).join('.') : ''
+}
+
+function toForm(m: Metric, tables: TableSummary[]): MetricForm {
+  const sourceDb = deriveSourceDb(m.source_table, tables)
   return {
     metric_id: m.metric_id,
     name: m.name,
@@ -53,7 +73,7 @@ function toForm(m: Metric): MetricForm {
     type: m.type,
     source_db: sourceDb,
     source_table: m.source_table,
-    datasource_id: (m as any).datasource_id || '',
+    datasource_id: m.datasource_id || '',
     joins: (m.joins || []).map((j) => ({
       table: j.table,
       source_column: j.source_column,
@@ -69,6 +89,11 @@ function toForm(m: Metric): MetricForm {
     base_metrics: m.base_metrics || [],
     synonyms: (m.synonyms || []).join(', '),
     grain: (m.grain || []).join(', '),
+    time_grains: (m.time_grains || []).join(', '),
+    aggregation: m.aggregation || 'additive',
+    value_type: m.value_type || 'number',
+    unit: m.unit || '',
+    format: m.format || '',
     filters: (m.filters || []).join('\n'),
   }
 }
@@ -87,6 +112,11 @@ function fromForm(f: MetricForm) {
     base_metrics: f.type === 'derived' ? f.base_metrics : [],
     synonyms: f.synonyms ? f.synonyms.split(',').map((s) => s.trim()).filter(Boolean) : [],
     grain: f.grain ? f.grain.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    time_grains: f.time_grains ? f.time_grains.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    aggregation: f.aggregation || 'additive',
+    value_type: f.value_type || 'number',
+    unit: f.unit || '',
+    format: f.format || '',
     filters: f.filters ? f.filters.split('\n').map((s) => s.trim()).filter(Boolean) : [],
   }
 }
@@ -129,7 +159,7 @@ export default function Metrics() {
   const scopedTables = useMemo(() => {
     const dsId = form.datasource_id
     if (dsId) return tables.filter((t) => t.datasource_id === dsId)
-    return tables.filter((t) => !t.datasource_id || t.datasource_id === 'ds_default_athena')
+    return tables.filter((t) => !t.datasource_id || t.datasource_id === DEFAULT_DATASOURCE_ID)
   }, [tables, form.datasource_id])
 
   const databases = useMemo(() =>
@@ -186,7 +216,7 @@ export default function Metrics() {
 
   const openEdit = (m: Metric) => {
     setEditing(m)
-    setForm(toForm(m))
+    setForm(toForm(m, tables))
     setPreviewSql(null)
     setShowModal(true)
   }
@@ -219,6 +249,16 @@ export default function Metrics() {
       await api.deleteMetric(m.metric_id)
       showToast(`Deleted metric "${m.name}"`)
       setExpandedSql((s) => { const next = { ...s }; delete next[m.metric_id]; return next })
+      load()
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
+  }
+
+  const handleSetStatus = async (m: Metric, status: string) => {
+    try {
+      await api.setMetricStatus(m.metric_id, status)
+      showToast(`Metric "${m.name}" ${status}`)
       load()
     } catch (e: unknown) {
       showToast((e as Error).message, 'error')
@@ -417,6 +457,15 @@ export default function Metrics() {
                   <td><span className="tag tag-blue">{m.metric_id}</span></td>
                   <td>
                     <strong>{m.name}</strong>
+                    {m.status && (
+                      <span
+                        className={`tag ${m.status === 'approved' ? 'tag-green' : m.status === 'deprecated' ? 'tag-red' : 'tag-orange'}`}
+                        style={{ marginLeft: 6, fontSize: 10 }}
+                        title={m.updated_by ? `v${m.version} · updated by ${m.updated_by}` : `v${m.version}`}
+                      >
+                        {m.status} v{m.version ?? 1}
+                      </span>
+                    )}
                     {m.source && m.source !== 'user' && (
                       <span className="tag" style={{ marginLeft: 6, fontSize: 10, background: 'var(--bg-alt)', color: 'var(--text-dim)', border: '1px solid var(--border)' }}>
                         {m.source}
@@ -446,6 +495,12 @@ export default function Metrics() {
                       {sqlLoading[m.metric_id] ? '...' : 'SQL'}
                     </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => navigate(`/graph?metric=${encodeURIComponent(m.name)}`)} style={{ marginRight: 6 }}>Graph</button>
+                    {m.status !== 'approved' && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => handleSetStatus(m, 'approved')} style={{ marginRight: 6 }}>Approve</button>
+                    )}
+                    {m.status === 'approved' && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => handleSetStatus(m, 'deprecated')} style={{ marginRight: 6 }}>Deprecate</button>
+                    )}
                     <button className="btn btn-ghost btn-sm" onClick={() => openEdit(m)} style={{ marginRight: 6 }}>Edit</button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDelete(m)}>Delete</button>
                   </td>
@@ -652,6 +707,52 @@ export default function Metrics() {
                   <label>Grain (comma-separated)</label>
                   <input value={form.grain} onChange={(e) => updateField('grain', e.target.value)}
                     placeholder="e.g. order_date, c.customer_name" />
+                </div>
+
+                <div className="form-group">
+                  <label>Time grains — allowed roll-ups (comma-separated)</label>
+                  <input value={form.time_grains} onChange={(e) => updateField('time_grains', e.target.value)}
+                    placeholder="e.g. day, week, month, quarter, year" />
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
+                    Time buckets a caller may request for this metric's date/timestamp dimension. Empty = any supported grain allowed.
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Additivity</label>
+                  <select value={form.aggregation} onChange={(e) => updateField('aggregation', e.target.value)}>
+                    <option value="additive">Additive — safe to sum across every dimension (e.g. revenue)</option>
+                    <option value="semi_additive">Semi-additive — sum across all dims except time (e.g. balance, inventory)</option>
+                    <option value="non_additive">Non-additive — cannot be summed (e.g. average, ratio, distinct count)</option>
+                  </select>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
+                    Controls whether the metric can be rolled up. Semi-additive metrics are rejected when summed across a time grain.
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Value type</label>
+                  <select value={form.value_type} onChange={(e) => updateField('value_type', e.target.value)}>
+                    <option value="number">Number</option>
+                    <option value="currency">Currency</option>
+                    <option value="percent">Percent</option>
+                    <option value="ratio">Ratio</option>
+                    <option value="count">Count</option>
+                    <option value="duration">Duration</option>
+                  </select>
+                </div>
+
+                <div className="form-row" style={{ display: 'flex', gap: 12 }}>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label>Unit (optional)</label>
+                    <input value={form.unit} onChange={(e) => updateField('unit', e.target.value)}
+                      placeholder="e.g. USD, orders, ms" />
+                  </div>
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label>Display format (optional)</label>
+                    <input value={form.format} onChange={(e) => updateField('format', e.target.value)}
+                      placeholder="e.g. $#,##0.00, 0.0%" />
+                  </div>
                 </div>
 
                 <div className="form-group">
