@@ -388,3 +388,33 @@ async def set_s3vectors_model(req: S3VectorsModelUpdate):
     _config.embedding.s3vectors_model_id = model_id
     logger.info("S3 Vectors embedding model set to %s", model_id)
     return {"ok": True, "s3vectors_model": model_id}
+
+
+@router.get("/config/enrichment-model")
+async def get_enrichment_model():
+    """Return the current metadata-enrichment model (free-text Bedrock modelId)."""
+    return {"enrichment_model": _config.bedrock.enrichment_model}
+
+
+class EnrichmentModelUpdate(BaseModel):
+    enrichment_model: str
+
+
+@router.put("/config/enrichment-model")
+async def set_enrichment_model(req: EnrichmentModelUpdate):
+    """Set the Bedrock model used for LLM metadata enrichment (free-text modelId).
+
+    Invoked via the Converse API, so any Converse-capable model works (Nova,
+    Claude, etc.). Persisted to Neo4j and applied in-memory immediately.
+    """
+    model_id = req.enrichment_model.strip()
+    if not model_id:
+        raise HTTPException(400, "enrichment_model must not be empty")
+
+    _get_graph().write(queries.UPSERT_ENRICHMENT_MODEL, {
+        "key": SYSTEM_CONFIG_KEY,
+        "enrichment_model": model_id,
+    })
+    _config.bedrock.enrichment_model = model_id
+    logger.info("Enrichment model set to %s", model_id)
+    return {"ok": True, "enrichment_model": model_id}

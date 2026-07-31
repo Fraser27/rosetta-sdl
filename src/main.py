@@ -54,6 +54,9 @@ try:
         if rows[0].get("s3vectors_embedding_model"):
             config.embedding.s3vectors_model_id = rows[0]["s3vectors_embedding_model"]
             logger.info("Loaded persisted s3vectors embedding model: %s", config.embedding.s3vectors_model_id)
+        if rows[0].get("enrichment_model"):
+            config.bedrock.enrichment_model = rows[0]["enrichment_model"]
+            logger.info("Loaded persisted enrichment model: %s", config.bedrock.enrichment_model)
 except Exception as e:
     logger.warning("Could not load persisted system config: %s", e)
 

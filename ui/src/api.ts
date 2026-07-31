@@ -227,6 +227,11 @@ export const api = {
     request<{ ok: boolean; s3vectors_model: string }>('/admin/config/s3vectors-model', {
       method: 'PUT', body: JSON.stringify({ s3vectors_model }),
     }),
+  getEnrichmentModel: () => request<{ enrichment_model: string }>('/admin/config/enrichment-model'),
+  setEnrichmentModel: (enrichment_model: string) =>
+    request<{ ok: boolean; enrichment_model: string }>('/admin/config/enrichment-model', {
+      method: 'PUT', body: JSON.stringify({ enrichment_model }),
+    }),
   sampleDataStatus: () => request<{ loaded: boolean; datasources: number; metrics: number }>('/admin/sample-data/status'),
   loadSampleData: () => request<Record<string, unknown>>('/admin/sample-data/load', { method: 'POST' }),
   deleteSampleData: () => request<Record<string, unknown>>('/admin/sample-data', { method: 'DELETE' }),

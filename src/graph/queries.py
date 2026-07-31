@@ -95,10 +95,17 @@ MERGE (c:SystemConfig {key: $key})
 SET c.s3vectors_embedding_model = $s3vectors_embedding_model
 """
 
+# Set only the enrichment model, preserving the others.
+UPSERT_ENRICHMENT_MODEL = """
+MERGE (c:SystemConfig {key: $key})
+SET c.enrichment_model = $enrichment_model
+"""
+
 GET_SYSTEM_CONFIG = """
 MATCH (c:SystemConfig {key: $key})
 RETURN c.query_model AS query_model,
-       c.s3vectors_embedding_model AS s3vectors_embedding_model
+       c.s3vectors_embedding_model AS s3vectors_embedding_model,
+       c.enrichment_model AS enrichment_model
 """
 
 MERGE_TABLE = """

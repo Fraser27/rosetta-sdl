@@ -33,6 +33,11 @@ export default function Admin() {
   const [availableEmbedModels, setAvailableEmbedModels] = useState<{ id: string; label: string }[]>([])
   const [savingS3vModel, setSavingS3vModel] = useState(false)
 
+  // Enrichment model config (free-text)
+  const [enrichModel, setEnrichModel] = useState('')
+  const [enrichModelDraft, setEnrichModelDraft] = useState('')
+  const [savingEnrichModel, setSavingEnrichModel] = useState(false)
+
   const checkSampleStatus = () => {
     api.sampleDataStatus().then((s) => {
       setSampleLoaded(s.loaded)
@@ -57,9 +62,28 @@ export default function Admin() {
       setS3vModel(m.s3vectors_model)
       setAvailableEmbedModels(m.available)
     }).catch(() => {})
+    api.getEnrichmentModel().then((m) => {
+      setEnrichModel(m.enrichment_model)
+      setEnrichModelDraft(m.enrichment_model)
+    }).catch(() => {})
     checkSampleStatus()
     refreshEmbeddingStats()
   }, [])
+
+  const saveEnrichModel = async () => {
+    const v = enrichModelDraft.trim()
+    if (!v || v === enrichModel) return
+    setSavingEnrichModel(true)
+    try {
+      await api.setEnrichmentModel(v)
+      setEnrichModel(v)
+      showToast('Enrichment model updated')
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    } finally {
+      setSavingEnrichModel(false)
+    }
+  }
 
   const saveS3vModel = async (modelId: string) => {
     setSavingS3vModel(true)
@@ -284,6 +308,26 @@ export default function Admin() {
           </select>
           <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
             {savingS3vModel ? 'Saving…' : <>Used to embed the question before the vector search. <strong>Must match the model your documents were ingested with</strong>, or scores are meaningless.</>}
+          </p>
+
+          <label style={{ display: 'block', fontSize: 13, color: 'var(--text-dim)', margin: '16px 0 4px' }}>
+            Metadata enrichment model
+          </label>
+          <div style={{ display: 'flex', gap: 8, maxWidth: 460 }}>
+            <input
+              value={enrichModelDraft}
+              onChange={(e) => setEnrichModelDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveEnrichModel() }}
+              placeholder="e.g. us.amazon.nova-2-lite-v1:0"
+              style={{ flex: 1, padding: '8px 10px' }}
+            />
+            <button className="btn btn-primary btn-sm" onClick={saveEnrichModel}
+              disabled={savingEnrichModel || !enrichModelDraft.trim() || enrichModelDraft.trim() === enrichModel}>
+              {savingEnrichModel ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 8 }}>
+            Bedrock modelId for LLM metadata enrichment (any Converse-capable model). Active: <code>{enrichModel || '—'}</code>
           </p>
         </div>
 
