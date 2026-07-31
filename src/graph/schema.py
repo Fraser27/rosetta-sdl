@@ -17,6 +17,8 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT datasource_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.name IS UNIQUE",
     "CREATE CONSTRAINT datasource_id_unique IF NOT EXISTS FOR (ds:DataSource) REQUIRE ds.datasource_id IS UNIQUE",
     "CREATE CONSTRAINT concept_unique IF NOT EXISTS FOR (c:Concept) REQUIRE c.name IS UNIQUE",
+    # Index metric-version snapshots for fast per-metric history lookup.
+    "CREATE INDEX metric_version_lookup IF NOT EXISTS FOR (mv:MetricVersion) ON (mv.metric_id)",
 ]
 
 # Full-text indexes for search across node properties

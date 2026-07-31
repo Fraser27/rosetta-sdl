@@ -144,6 +144,63 @@ CREATE_METRIC_NODE = """
 CREATE (m:Metric {metric_id: $metric_id})
 """
 
+# Snapshot the CURRENT metric state into a :MetricVersion node before it is
+# overwritten by an update. Copies the versioned definition fields, links it via
+# HAS_VERSION, then prunes to the 10 most recent snapshots for this metric.
+# No-op if the metric doesn't exist yet (first create has nothing to snapshot).
+SNAPSHOT_METRIC_VERSION = """
+MATCH (m:Metric {metric_id: $metric_id})
+WHERE m.name IS NOT NULL
+CREATE (mv:MetricVersion {
+    metric_id: m.metric_id,
+    version: COALESCE(m.version, 1),
+    name: m.name, definition: m.definition, expression: m.expression,
+    type: m.type, source_table: m.source_table,
+    synonyms: m.synonyms, grain: m.grain, filters: m.filters,
+    time_grains: m.time_grains, aggregation: m.aggregation,
+    value_type: m.value_type, unit: m.unit, format: m.format,
+    status: m.status, updated_by: m.updated_by, updated_at: m.updated_at,
+    joins_json: m.joins_json, parameters_json: m.parameters_json,
+    base_metrics: m.base_metrics, source: m.source,
+    snapshot_at: $snapshot_at
+})
+CREATE (m)-[:HAS_VERSION]->(mv)
+WITH m
+MATCH (m)-[:HAS_VERSION]->(old:MetricVersion)
+WITH old ORDER BY old.version DESC
+SKIP 10
+DETACH DELETE old
+"""
+
+# List version snapshots for a metric (newest first), summary fields only.
+LIST_METRIC_VERSIONS = """
+MATCH (:Metric {metric_id: $metric_id})-[:HAS_VERSION]->(mv:MetricVersion)
+RETURN mv.version AS version, mv.name AS name, mv.status AS status,
+       mv.updated_by AS updated_by, mv.updated_at AS updated_at,
+       mv.snapshot_at AS snapshot_at
+ORDER BY mv.version DESC
+"""
+
+# Full definition of one historical version (for view / restore).
+GET_METRIC_VERSION = """
+MATCH (:Metric {metric_id: $metric_id})-[:HAS_VERSION]->(mv:MetricVersion {version: $version})
+RETURN mv.metric_id AS metric_id, mv.name AS name, mv.definition AS definition,
+       mv.expression AS expression, mv.type AS type, mv.source_table AS source_table,
+       mv.synonyms AS synonyms, mv.grain AS grain, mv.filters AS filters,
+       mv.time_grains AS time_grains, mv.aggregation AS aggregation,
+       mv.value_type AS value_type, mv.unit AS unit, mv.format AS format,
+       mv.status AS status, mv.version AS version,
+       mv.updated_by AS updated_by, mv.updated_at AS updated_at,
+       mv.joins_json AS joins_json, mv.parameters_json AS parameters_json,
+       mv.base_metrics AS base_metrics, mv.source AS source
+"""
+
+# Delete one specific historical version.
+DELETE_METRIC_VERSION = """
+MATCH (:Metric {metric_id: $metric_id})-[:HAS_VERSION]->(mv:MetricVersion {version: $version})
+DETACH DELETE mv
+"""
+
 MERGE_METRIC = """
 MERGE (m:Metric {metric_id: $metric_id})
 SET m.name = $name, m.definition = $definition, m.expression = $expression,
@@ -412,7 +469,8 @@ MATCH (t:Table) RETURN collect(t.full_name) AS table_names
 
 DELETE_METRIC = """
 MATCH (m:Metric {metric_id: $metric_id})
-DETACH DELETE m
+OPTIONAL MATCH (m)-[:HAS_VERSION]->(mv:MetricVersion)
+DETACH DELETE m, mv
 """
 
 EMBEDDING_STATS = """

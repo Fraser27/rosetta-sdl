@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource } from '../api'
+import { api, type Metric, type MetricJoin, type TableSummary, type Column, type DataSource, type MetricVersionSummary } from '../api'
 import FieldHelp from '../components/FieldHelp'
 
 interface JoinRow {
@@ -144,6 +144,47 @@ export default function Metrics() {
   // Expanded SQL row in table
   const [expandedSql, setExpandedSql] = useState<Record<string, string | null>>({})
   const [sqlLoading, setSqlLoading] = useState<Record<string, boolean>>({})
+
+  // Version history
+  const [historyMetric, setHistoryMetric] = useState<Metric | null>(null)
+  const [versions, setVersions] = useState<MetricVersionSummary[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [viewedVersion, setViewedVersion] = useState<Metric | null>(null)
+
+  const openHistory = async (m: Metric) => {
+    setHistoryMetric(m)
+    setViewedVersion(null)
+    setVersionsLoading(true)
+    try {
+      setVersions(await api.listMetricVersions(m.metric_id))
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }
+
+  const viewVersion = async (version: number) => {
+    if (!historyMetric) return
+    try {
+      setViewedVersion(await api.getMetricVersion(historyMetric.metric_id, version))
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
+  }
+
+  const restoreVersion = async (version: number) => {
+    if (!historyMetric) return
+    if (!confirm(`Restore v${version}? This saves the old definition as a new draft version (current state is kept in history).`)) return
+    try {
+      const res = await api.restoreMetricVersion(historyMetric.metric_id, version)
+      showToast(`Restored v${version} as v${res.version} (draft)`)
+      setHistoryMetric(null)
+      load()
+    } catch (e: unknown) {
+      showToast((e as Error).message, 'error')
+    }
+  }
 
   const load = () => {
     Promise.all([api.listMetrics(), api.listTables(), api.listDatasourcesFull()])
@@ -503,6 +544,7 @@ export default function Metrics() {
                       <button className="btn btn-ghost btn-sm" onClick={() => handleSetStatus(m, 'deprecated')} style={{ marginRight: 6 }}>Deprecate</button>
                     )}
                     <button className="btn btn-ghost btn-sm" onClick={() => openEdit(m)} style={{ marginRight: 6 }}>Edit</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openHistory(m)} style={{ marginRight: 6 }} title="View version history">History</button>
                     <button className="btn btn-danger btn-sm" onClick={() => handleDelete(m)}>Delete</button>
                   </td>
                 </tr>
@@ -843,6 +885,65 @@ export default function Metrics() {
                 </p>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {historyMetric && (
+        <div className="modal-overlay" onClick={() => setHistoryMetric(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+            <div className="card-header" style={{ marginBottom: 16 }}>
+              <h3>History — {historyMetric.name} <span className="tag tag-blue">{historyMetric.metric_id}</span></h3>
+              <button className="btn btn-ghost btn-sm" onClick={() => setHistoryMetric(null)}>Close</button>
+            </div>
+
+            <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>
+              Snapshots of prior definitions (up to the last 10). The current live definition is v{historyMetric.version ?? 1}.
+            </p>
+
+            {versionsLoading ? (
+              <p style={{ color: 'var(--text-dim)' }}>Loading…</p>
+            ) : versions.length === 0 ? (
+              <p style={{ color: 'var(--text-dim)' }}>No prior versions yet — history starts accruing from the next edit.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr><th>Version</th><th>Status</th><th>Updated by</th><th>When</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {versions.map((v) => (
+                    <>
+                      <tr key={v.version}>
+                        <td><span className="tag tag-blue">v{v.version}</span></td>
+                        <td>{v.status}</td>
+                        <td style={{ fontSize: 12 }}>{v.updated_by || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                          {v.snapshot_at ? new Date(v.snapshot_at).toLocaleString() : (v.updated_at ? new Date(v.updated_at).toLocaleString() : '—')}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn btn-ghost btn-sm" onClick={() => viewVersion(v.version)} style={{ marginRight: 6 }}>View</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => restoreVersion(v.version)}>Restore</button>
+                        </td>
+                      </tr>
+                      {viewedVersion && viewedVersion.version === v.version && (
+                        <tr key={`${v.version}-detail`}>
+                          <td colSpan={5} style={{ padding: 0 }}>
+                            <pre className="code-block" style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+{`expression:  ${viewedVersion.expression}
+source_table: ${viewedVersion.source_table || '—'}
+grain:       ${(viewedVersion.grain || []).join(', ') || '—'}
+filters:     ${(viewedVersion.filters || []).join(' AND ') || '—'}
+synonyms:    ${(viewedVersion.synonyms || []).join(', ') || '—'}
+definition:  ${viewedVersion.definition || '—'}`}
+                            </pre>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

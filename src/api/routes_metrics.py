@@ -463,12 +463,103 @@ async def update_metric(metric_id: str, req: MetricCreateRequest, http_request: 
     gov = graph.query(queries.GET_METRIC_GOVERNANCE, {"metric_id": metric_id})
     prev_version = int(gov[0]["version"]) if gov else 0
     new_version = prev_version + 1
+    # Snapshot the current state as a historical version BEFORE it's overwritten,
+    # then prune to the last 10. No-op on a metric that doesn't exist yet.
+    graph.write(queries.SNAPSHOT_METRIC_VERSION, {
+        "metric_id": metric_id,
+        "snapshot_at": datetime.now(timezone.utc).isoformat(),
+    })
     _save_metric(
         graph, metric_id, req, background_tasks=background_tasks,
         status="draft", version=new_version, updated_by=user,
     )
     record_mutation(action="metric_update", entity_type="metric", entity_id=metric_id, user=user)
     return {"ok": True, "metric_id": metric_id, "status": "draft", "version": new_version}
+
+
+@router.get("/{metric_id}/versions")
+async def list_metric_versions(metric_id: str):
+    """List historical version snapshots of a metric (newest first, up to 10)."""
+    return _get_graph().query(queries.LIST_METRIC_VERSIONS, {"metric_id": metric_id})
+
+
+@router.get("/{metric_id}/versions/{version}")
+async def get_metric_version(metric_id: str, version: int):
+    """Get the full definition of one historical metric version."""
+    rows = _get_graph().query(
+        queries.GET_METRIC_VERSION, {"metric_id": metric_id, "version": version}
+    )
+    if not rows:
+        raise HTTPException(404, f"Version {version} of metric '{metric_id}' not found")
+    r = rows[0]
+    r["joins"] = _parse_joins(r.pop("joins_json", None))
+    r["parameters"] = _parse_parameters(r.pop("parameters_json", None))
+    return r
+
+
+@router.delete("/{metric_id}/versions/{version}")
+async def delete_metric_version(metric_id: str, version: int, http_request: Request):
+    """Delete a single historical version snapshot."""
+    graph = _get_graph()
+    user = user_from_request(http_request)
+    rows = graph.query(queries.GET_METRIC_VERSION, {"metric_id": metric_id, "version": version})
+    if not rows:
+        raise HTTPException(404, f"Version {version} of metric '{metric_id}' not found")
+    graph.write(queries.DELETE_METRIC_VERSION, {"metric_id": metric_id, "version": version})
+    record_mutation(action="metric_version_delete", entity_type="metric", entity_id=metric_id, user=user)
+    return {"ok": True}
+
+
+@router.post("/{metric_id}/versions/{version}/restore")
+async def restore_metric_version(metric_id: str, version: int, http_request: Request, background_tasks: BackgroundTasks):
+    """Restore a historical version by re-applying its definition as a NEW version.
+
+    The current state is first snapshotted (so a restore is itself reversible),
+    then the old definition is written with a bumped version and draft status.
+    """
+    graph = _get_graph()
+    user = user_from_request(http_request)
+    rows = graph.query(queries.GET_METRIC_VERSION, {"metric_id": metric_id, "version": version})
+    if not rows:
+        raise HTTPException(404, f"Version {version} of metric '{metric_id}' not found")
+    v = rows[0]
+
+    gov = graph.query(queries.GET_METRIC_GOVERNANCE, {"metric_id": metric_id})
+    new_version = (int(gov[0]["version"]) if gov else 0) + 1
+
+    # Snapshot current state before overwriting (restore is reversible), prune to 10.
+    graph.write(queries.SNAPSHOT_METRIC_VERSION, {
+        "metric_id": metric_id,
+        "snapshot_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    req = MetricCreateRequest(
+        metric_id=metric_id,
+        name=v["name"],
+        definition=v.get("definition") or "",
+        expression=v.get("expression") or "",
+        type=v.get("type") or "simple",
+        source_table=v.get("source_table") or "",
+        datasource_id=_resolve_datasource_id_for_metric(metric_id, graph),
+        joins=[MetricJoin(**j) for j in _parse_joins(v.get("joins_json"))],
+        base_metrics=v.get("base_metrics") or [],
+        synonyms=v.get("synonyms") or [],
+        grain=v.get("grain") or [],
+        filters=v.get("filters") or [],
+        parameters=[MetricParameter(**p) for p in _parse_parameters(v.get("parameters_json"))],
+        time_grains=v.get("time_grains") or [],
+        aggregation=v.get("aggregation") or "additive",
+        value_type=v.get("value_type") or "number",
+        unit=v.get("unit") or "",
+        format=v.get("format") or "",
+        source=v.get("source") or "user",
+    )
+    _save_metric(
+        graph, metric_id, req, background_tasks=background_tasks,
+        status="draft", version=new_version, updated_by=user,
+    )
+    record_mutation(action="metric_version_restore", entity_type="metric", entity_id=metric_id, user=user)
+    return {"ok": True, "metric_id": metric_id, "restored_from": version, "version": new_version, "status": "draft"}
 
 
 class MetricStatusRequest(BaseModel):
