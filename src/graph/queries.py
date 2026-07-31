@@ -482,6 +482,7 @@ RETURN total, embedded
 
 GRAPH_DATA = """
 MATCH (n)
+WHERE NOT n:AuditEvent AND NOT n:SystemConfig
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
 RETURN collect({
     id: toString(nid),
@@ -513,6 +514,8 @@ RETURN collect({
 
 GRAPH_EDGES = """
 MATCH (a)-[r]->(b)
+WHERE NOT a:AuditEvent AND NOT a:SystemConfig
+  AND NOT b:AuditEvent AND NOT b:SystemConfig
 WITH a, r, b, labels(a)[0] AS albl, labels(b)[0] AS blbl
 RETURN collect({
     source: toString(id(a)),

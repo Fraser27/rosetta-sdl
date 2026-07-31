@@ -768,6 +768,26 @@ a:hover { text-decoration: underline; }
   padding: 4px 8px;
 }
 
+/* Graph node inspect panel */
+.graph-inspect {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 260px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  padding: 14px;
+  z-index: 50;
+}
+.graph-inspect-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.graph-inspect-head strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-inspect-meta { margin: 0 0 12px; display: grid; gap: 8px; }
+.graph-inspect-meta dt { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); }
+.graph-inspect-meta dd { margin: 0; font-size: 13px; word-break: break-word; }
+.graph-inspect-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
 .loading, .empty-state { text-align: center; padding: 40px; color: var(--text-dim); }
 
 .spinner {
