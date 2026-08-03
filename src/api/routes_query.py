@@ -119,6 +119,7 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
             response.metric_name = sql_result.get("metric_name")
             response.sql = sql_result.get("sql")
             response.results = sql_result.get("results")
+            response.hint = sql_result.get("hint")
             _results = sql_result.get("results") or {}
             record_query(
                 action="nl_query", user=user, query_type=response.query_type or "",
@@ -148,6 +149,35 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
 async def _noop():
     """Placeholder coroutine for a route path that isn't taken."""
     return None
+
+
+def _unapproved_metric_hint(question: str, graph: GraphClient) -> str | None:
+    """Detect a governed metric that matches the question but was skipped by routing
+    because it isn't approved (e.g. draft/deprecated).
+
+    NL routing only serves approved metrics, so a matching draft silently falls
+    through to ungoverned SQL. This mirrors the disambiguator's full-text match
+    WITHOUT the status gate, so we can nudge the user to approve it.
+    """
+    try:
+        hits = graph.query(
+            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+            "WHERE score > 0.3 AND COALESCE(node.status, 'approved') <> 'approved' "
+            "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
+            "ORDER BY score DESC LIMIT 1",
+            {"q": question},
+        )
+    except Exception as e:
+        logger.debug("Unapproved-metric hint lookup failed: %s", e)
+        return None
+    if not hits:
+        return None
+    m = hits[0]
+    return (
+        f"A governed metric '{m['name']}' matches this question but is '{m['status']}', "
+        f"not approved — so this answer used ungoverned LLM-generated SQL. "
+        f"Approve the metric to get the deterministic governed result."
+    )
 
 
 def _resolve_datasource_id_for_metric(metric_id: str, graph: GraphClient) -> str:
@@ -321,8 +351,8 @@ async def _handle_structured(
                 "results": result,
             }
 
-    # No metric match — generate SQL via LLM
-    sql = generate_sql(question, disambiguation, graph, _config.bedrock.query_model)
+    # No metric match — generate SQL via LLM, grounded in the full catalog schema.
+    sql = generate_sql(question, graph, _config.bedrock.query_model)
 
     # Firewall check
     if _firewall:
@@ -342,6 +372,7 @@ async def _handle_structured(
         "datasource_id": resolved_ds or "",
         "sql": sql,
         "results": result,
+        "hint": _unapproved_metric_hint(question, graph),
     }
 
 
@@ -419,12 +450,13 @@ async def plan_query_endpoint(request: NLQueryRequest):
                     plan.metric_name = compiled.metric_name
                     plan.sql = compiled.sql
 
-            # No metric match — generate SQL via LLM
+            # No metric match — generate SQL via LLM, grounded in the full catalog schema.
             if not plan.sql:
-                sql = generate_sql(request.question, disambiguation, graph, _config.bedrock.query_model)
+                sql = generate_sql(request.question, graph, _config.bedrock.query_model)
                 plan.intent = "analytical"
                 plan.query_type = "ungoverned"
                 plan.sql = sql
+                plan.hint = _unapproved_metric_hint(request.question, graph)
 
             # Firewall check — include result in plan, don't throw
             if plan.sql and _firewall:
