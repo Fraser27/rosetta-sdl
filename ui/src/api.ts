@@ -177,8 +177,13 @@ export const api = {
   uploadDocumentMetadata: async (key: string, file: File): Promise<{ ok: boolean; words: number }> => {
     const form = new FormData()
     form.append('file', file)
+    const headers: Record<string, string> = {}
+    if (isAuthEnabled()) {
+      const token = getAccessToken()
+      if (token) headers['Authorization'] = `Bearer ${token}`
+    }
     // Multipart upload — don't set Content-Type; the browser adds the boundary.
-    const res = await fetch(`/api/catalog/documents/${key}/metadata-file`, { method: 'POST', body: form })
+    const res = await fetch(`/api/catalog/documents/${key}/metadata-file`, { method: 'POST', body: form, headers })
     if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`)
     return res.json()
   },
