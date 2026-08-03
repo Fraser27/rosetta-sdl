@@ -156,9 +156,13 @@ def _unapproved_metric_hint(question: str, graph: GraphClient) -> str | None:
     because it isn't approved (e.g. draft/deprecated).
 
     NL routing only serves approved metrics, so a matching draft silently falls
-    through to ungoverned SQL. This mirrors the disambiguator's full-text match
-    WITHOUT the status gate, so we can nudge the user to approve it.
+    through to ungoverned SQL. This mirrors the router's matching (full-text, then
+    vector-embedding fallback) WITHOUT the status gate — inverting it to non-approved
+    metrics — so the nudge fires on natural questions, not just terse keyword ones.
+    (A bare "fraud rate" scores ~0.31 on full-text, but "what is the fraud rate?"
+    drops to ~0.18 as stopwords dilute the Lucene score; the vector path catches it.)
     """
+    m = None
     try:
         hits = graph.query(
             "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
@@ -167,12 +171,34 @@ def _unapproved_metric_hint(question: str, graph: GraphClient) -> str | None:
             "ORDER BY score DESC LIMIT 1",
             {"q": question},
         )
+        m = hits[0] if hits else None
     except Exception as e:
-        logger.debug("Unapproved-metric hint lookup failed: %s", e)
+        logger.debug("Unapproved-metric hint full-text lookup failed: %s", e)
+
+    # Vector fallback — embed the question and kNN over metric embeddings, keeping
+    # only non-approved matches above the configured similarity floor.
+    if m is None and _config and _config.embedding.enabled:
+        try:
+            from src.query.embeddings import get_embedding
+
+            question_vec = get_embedding(
+                question, _config.embedding.model_id, _config.embedding.dimensions
+            )
+            if question_vec:
+                vhits = graph.query(
+                    "CALL db.index.vector.queryNodes('metric_embedding', 5, $vec) "
+                    "YIELD node, score "
+                    "WHERE score > $min_score AND COALESCE(node.status, 'approved') <> 'approved' "
+                    "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
+                    "ORDER BY score DESC LIMIT 1",
+                    {"vec": question_vec, "min_score": _config.embedding.vector_min_score},
+                )
+                m = vhits[0] if vhits else None
+        except Exception as e:
+            logger.debug("Unapproved-metric hint vector lookup failed: %s", e)
+
+    if m is None:
         return None
-    if not hits:
-        return None
-    m = hits[0]
     return (
         f"A governed metric '{m['name']}' matches this question but is '{m['status']}', "
         f"not approved — so this answer used ungoverned LLM-generated SQL. "
