@@ -146,6 +146,9 @@ class QueryResponse(BaseModel):
     results: dict | None = None
     vector_results: list[dict] | None = None
     error: str | None = None
+    # Set when an ungoverned query matched a governed metric that was excluded from
+    # routing because it isn't approved (e.g. draft). Nudges the user to approve it.
+    hint: str | None = None
 
 
 class QueryPlan(BaseModel):
@@ -162,3 +165,6 @@ class QueryPlan(BaseModel):
     firewall_reason: str | None = None
     denied_tables: list[str] = Field(default_factory=list)
     error: str | None = None
+    # Set when an ungoverned query matched a governed metric that was excluded from
+    # routing because it isn't approved (e.g. draft). Nudges the user to approve it.
+    hint: str | None = None

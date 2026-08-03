@@ -119,6 +119,7 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
             response.metric_name = sql_result.get("metric_name")
             response.sql = sql_result.get("sql")
             response.results = sql_result.get("results")
+            response.hint = sql_result.get("hint")
             _results = sql_result.get("results") or {}
             record_query(
                 action="nl_query", user=user, query_type=response.query_type or "",
@@ -148,6 +149,61 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
 async def _noop():
     """Placeholder coroutine for a route path that isn't taken."""
     return None
+
+
+def _unapproved_metric_hint(question: str, graph: GraphClient) -> str | None:
+    """Detect a governed metric that matches the question but was skipped by routing
+    because it isn't approved (e.g. draft/deprecated).
+
+    NL routing only serves approved metrics, so a matching draft silently falls
+    through to ungoverned SQL. This mirrors the router's matching (full-text, then
+    vector-embedding fallback) WITHOUT the status gate — inverting it to non-approved
+    metrics — so the nudge fires on natural questions, not just terse keyword ones.
+    (A bare "fraud rate" scores ~0.31 on full-text, but "what is the fraud rate?"
+    drops to ~0.18 as stopwords dilute the Lucene score; the vector path catches it.)
+    """
+    m = None
+    try:
+        hits = graph.query(
+            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+            "WHERE score > 0.3 AND COALESCE(node.status, 'approved') <> 'approved' "
+            "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
+            "ORDER BY score DESC LIMIT 1",
+            {"q": question},
+        )
+        m = hits[0] if hits else None
+    except Exception as e:
+        logger.debug("Unapproved-metric hint full-text lookup failed: %s", e)
+
+    # Vector fallback — embed the question and kNN over metric embeddings, keeping
+    # only non-approved matches above the configured similarity floor.
+    if m is None and _config and _config.embedding.enabled:
+        try:
+            from src.query.embeddings import get_embedding
+
+            question_vec = get_embedding(
+                question, _config.embedding.model_id, _config.embedding.dimensions
+            )
+            if question_vec:
+                vhits = graph.query(
+                    "CALL db.index.vector.queryNodes('metric_embedding', 5, $vec) "
+                    "YIELD node, score "
+                    "WHERE score > $min_score AND COALESCE(node.status, 'approved') <> 'approved' "
+                    "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
+                    "ORDER BY score DESC LIMIT 1",
+                    {"vec": question_vec, "min_score": _config.embedding.vector_min_score},
+                )
+                m = vhits[0] if vhits else None
+        except Exception as e:
+            logger.debug("Unapproved-metric hint vector lookup failed: %s", e)
+
+    if m is None:
+        return None
+    return (
+        f"A governed metric '{m['name']}' matches this question but is '{m['status']}', "
+        f"not approved — so this answer used ungoverned LLM-generated SQL. "
+        f"Approve the metric to get the deterministic governed result."
+    )
 
 
 def _resolve_datasource_id_for_metric(metric_id: str, graph: GraphClient) -> str:
@@ -321,8 +377,8 @@ async def _handle_structured(
                 "results": result,
             }
 
-    # No metric match — generate SQL via LLM
-    sql = generate_sql(question, disambiguation, graph, _config.bedrock.query_model)
+    # No metric match — generate SQL via LLM, grounded in the full catalog schema.
+    sql = generate_sql(question, graph, _config.bedrock.query_model)
 
     # Firewall check
     if _firewall:
@@ -342,6 +398,7 @@ async def _handle_structured(
         "datasource_id": resolved_ds or "",
         "sql": sql,
         "results": result,
+        "hint": _unapproved_metric_hint(question, graph),
     }
 
 
@@ -419,12 +476,13 @@ async def plan_query_endpoint(request: NLQueryRequest):
                     plan.metric_name = compiled.metric_name
                     plan.sql = compiled.sql
 
-            # No metric match — generate SQL via LLM
+            # No metric match — generate SQL via LLM, grounded in the full catalog schema.
             if not plan.sql:
-                sql = generate_sql(request.question, disambiguation, graph, _config.bedrock.query_model)
+                sql = generate_sql(request.question, graph, _config.bedrock.query_model)
                 plan.intent = "analytical"
                 plan.query_type = "ungoverned"
                 plan.sql = sql
+                plan.hint = _unapproved_metric_hint(request.question, graph)
 
             # Firewall check — include result in plan, don't throw
             if plan.sql and _firewall:

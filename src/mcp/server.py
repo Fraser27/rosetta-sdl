@@ -266,6 +266,8 @@ def execute_query(
         lines.append(f"Metric: {data['metric_name']}")
     if data.get("sql"):
         lines.append(f"SQL: {data['sql']}")
+    if data.get("hint"):
+        lines.append(f"Hint: {data['hint']}")
     if data.get("error"):
         lines.append(f"Error: {data['error']}")
 
@@ -437,6 +439,8 @@ def plan_query(
         lines.append(f"Metric: {data['metric_name']} (governed — deterministic SQL)")
     if data.get("sql"):
         lines.append(f"SQL: {data['sql']}")
+    if data.get("hint"):
+        lines.append(f"Hint: {data['hint']}")
     if data.get("tables"):
         lines.append(f"Tables: {', '.join(data['tables'])}")
     if data.get("join_paths"):
