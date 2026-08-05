@@ -96,6 +96,7 @@ def load_metrics(metrics_file: str) -> tuple[list[MetricDefinition], list[JoinPa
                 grain=m.get("grain", []),
                 parameters=parameters,
                 time_grains=m.get("time_grains", []),
+                time_grain_column=m.get("time_grain_column", ""),
                 aggregation=m.get("aggregation", "additive"),
                 value_type=m.get("value_type", "number"),
                 unit=m.get("unit", ""),

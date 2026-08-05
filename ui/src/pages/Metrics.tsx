@@ -38,6 +38,7 @@ interface MetricForm {
   synonyms: string
   grain: string
   time_grains: string
+  time_grain_column: string
   aggregation: string
   value_type: string
   unit: string
@@ -48,7 +49,8 @@ interface MetricForm {
 const emptyForm: MetricForm = {
   metric_id: '', name: '', definition: '', expression: '',
   type: 'simple', source_db: '', source_table: '', datasource_id: '', joins: [], parameters: [],
-  base_metrics: [], synonyms: '', grain: '', time_grains: '', aggregation: 'additive',
+  base_metrics: [], synonyms: '', grain: '', time_grains: '', time_grain_column: '',
+  aggregation: 'additive',
   value_type: 'number', unit: '', format: '', filters: '',
 }
 
@@ -91,6 +93,7 @@ function toForm(m: Metric, tables: TableSummary[]): MetricForm {
     synonyms: (m.synonyms || []).join(', '),
     grain: (m.grain || []).join(', '),
     time_grains: (m.time_grains || []).join(', '),
+    time_grain_column: m.time_grain_column || '',
     aggregation: m.aggregation || 'additive',
     value_type: m.value_type || 'number',
     unit: m.unit || '',
@@ -114,6 +117,7 @@ function fromForm(f: MetricForm) {
     synonyms: f.synonyms ? f.synonyms.split(',').map((s) => s.trim()).filter(Boolean) : [],
     grain: f.grain ? f.grain.split(',').map((s) => s.trim()).filter(Boolean) : [],
     time_grains: f.time_grains ? f.time_grains.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    time_grain_column: f.type === 'derived' ? '' : f.time_grain_column,
     aggregation: f.aggregation || 'additive',
     value_type: f.value_type || 'number',
     unit: f.unit || '',
@@ -243,6 +247,10 @@ export default function Metrics() {
   }, [form.joins.map((j) => j.table).join(',')])
 
   const sourceColumns = columnCache[form.source_table] || []
+  // Candidates for the governed time axis: real date/timestamp columns only, so a
+  // month/year partition string can't be picked as the axis it's meant to guard.
+  const temporalSourceColumns = sourceColumns.filter((c) =>
+    /^(date|timestamp|time)/i.test(c.data_type || ''))
 
   const showToast = (msg: string, type = 'success') => {
     setToast({ msg, type })
@@ -753,11 +761,25 @@ export default function Metrics() {
                 </div>
 
                 <div className="form-group">
-                  <label>Time grains — allowed roll-ups (comma-separated) <FieldHelp text="The time buckets a user may roll this metric's date/timestamp dimension up to, e.g. day, week, month, quarter, year. The query layer applies DATE_TRUNC to that grain. Leave empty to allow any supported grain." /></label>
+                  <label>Time grain column <FieldHelp text="The single date/timestamp column that time grains apply to — the metric's governed time axis. DATE_TRUNC is applied to this column. Grouping by any other time-based column (including month/year partition columns) is then rejected, so the declared roll-ups cannot be bypassed. Leave empty to fall back to the first date/timestamp column in Grain." /></label>
+                  <select value={form.time_grain_column} onChange={(e) => updateField('time_grain_column', e.target.value)}>
+                    <option value="">(first date/timestamp column in Grain)</option>
+                    {temporalSourceColumns.map((c) => (
+                      <option key={c.name} value={c.name}>{c.name} ({c.data_type})</option>
+                    ))}
+                  </select>
+                  <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
+                    The governed time axis. Only this column may be bucketed by a time grain.
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Time grains — allowed roll-ups (comma-separated) <FieldHelp text="The time buckets a user may roll this metric's time axis up to, e.g. day, week, month, quarter, year. The query layer applies DATE_TRUNC to that grain. When set, a query that names no grain is served at the coarsest one declared here, and grouping by another time column is refused. Leave empty to allow any supported grain." /></label>
                   <input value={form.time_grains} onChange={(e) => updateField('time_grains', e.target.value)}
                     placeholder="e.g. day, week, month, quarter, year" />
                   <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '4px 0' }}>
-                    Time buckets a caller may request for this metric's date/timestamp dimension. Empty = any supported grain allowed.
+                    Grains a caller may request for the time axis. Empty = any supported grain allowed.
+                    When set, queries default to the coarsest grain listed.
                   </p>
                 </div>
 
@@ -932,6 +954,7 @@ export default function Metrics() {
 {`expression:  ${viewedVersion.expression}
 source_table: ${viewedVersion.source_table || '—'}
 grain:       ${(viewedVersion.grain || []).join(', ') || '—'}
+time_grains: ${(viewedVersion.time_grains || []).join(', ') || '—'}${viewedVersion.time_grain_column ? ` on ${viewedVersion.time_grain_column}` : ''}
 filters:     ${(viewedVersion.filters || []).join(' AND ') || '—'}
 synonyms:    ${(viewedVersion.synonyms || []).join(', ') || '—'}
 definition:  ${viewedVersion.definition || '—'}`}

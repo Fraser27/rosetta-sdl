@@ -31,8 +31,14 @@ _TIME_GRAIN_UNITS = {
     "quarter": "quarter",
     "year": "year",
 }
+# Coarseness ranking, used to pick a default when a metric declares several grains.
+_TIME_GRAIN_ORDER = {"hour": 0, "day": 1, "week": 2, "month": 3, "quarter": 4, "year": 5}
 # Column data-type prefixes (lowercased) treated as temporal for bucketing.
 _TEMPORAL_TYPE_PREFIXES = ("date", "timestamp", "time")
+# Column names that denote a calendar part even when stored as a string/int
+# (Glue partition columns like month='03'). These carry a time grain implicitly,
+# so grouping by one sidesteps a metric's declared time_grains.
+_CALENDAR_PART_NAMES = frozenset(_TIME_GRAIN_UNITS)
 # Valid additivity classes for a metric.
 _VALID_AGGREGATIONS = {"additive", "semi_additive", "non_additive"}
 
@@ -235,13 +241,71 @@ def _is_temporal_type(data_type: str) -> bool:
     return data_type.startswith(_TEMPORAL_TYPE_PREFIXES)
 
 
-def _pick_temporal_dimension(
-    dimensions: list[str], col_types: dict[str, str]
+def _resolve_time_axis(
+    metric: dict, col_types: dict[str, str]
 ) -> str | None:
-    """Return the first dimension that maps to a temporal column, or None."""
-    for d in dimensions:
+    """Resolve the metric's governed time axis — the one column time_grains applies to.
+
+    Prefers the explicit time_grain_column; falls back to the first temporal column
+    in the metric's grain so metrics authored before that field keep working.
+    """
+    declared = (metric.get("time_grain_column") or "").strip()
+    if declared:
+        return declared
+    for d in metric.get("grain") or []:
         if _is_temporal_type(col_types.get(d, "")):
             return d
+    return None
+
+
+def _default_time_grain(declared_grains: list[str]) -> str | None:
+    """Pick the grain to bucket to when a metric restricts grains but none was requested.
+
+    Coarsest declared grain wins: it is the safest default, since a metric limited to
+    ['year'] must never emit finer-grained rows just because the caller stayed silent.
+    """
+    valid = [g.lower() for g in declared_grains if g.lower() in _TIME_GRAIN_UNITS]
+    if not valid:
+        return None
+    return max(valid, key=lambda g: _TIME_GRAIN_ORDER[g])
+
+
+def _is_time_like(column: str, col_types: dict[str, str]) -> bool:
+    """True if grouping by this column slices data along time.
+
+    Covers both real date/timestamp columns and calendar-part partition columns
+    (month, year, ...) that are typed as string/int but still carry a time grain.
+    """
+    return _is_temporal_type(col_types.get(column, "")) or column.lower() in _CALENDAR_PART_NAMES
+
+
+def _check_time_axis_bypass(
+    dimensions: list[str],
+    time_axis: str | None,
+    declared_grains: list[str],
+    col_types: dict[str, str],
+) -> str | None:
+    """Reject time-based dimensions other than the metric's governed time axis.
+
+    A metric that declares time_grains only controls DATE_TRUNC on its time axis.
+    Grouping by any *other* time-like column (a raw timestamp, or a month/year
+    partition string) reintroduces a finer grain and bypasses that restriction, so
+    it is refused outright rather than silently answered at the wrong grain.
+    """
+    if not declared_grains:
+        return None
+    for d in dimensions:
+        if d == time_axis or not _is_time_like(d, col_types):
+            continue
+        axis_hint = (
+            f"group by '{time_axis}' with a time_grain from {sorted(declared_grains)} instead"
+            if time_axis
+            else f"this metric declares time_grains {sorted(declared_grains)} but no time axis column"
+        )
+        return (
+            f"Dimension '{d}' groups by time but is not this metric's governed time axis "
+            f"— that would bypass the declared time_grains {sorted(declared_grains)}; {axis_hint}."
+        )
     return None
 
 
@@ -250,15 +314,16 @@ def _apply_time_grain(
     time_grain: str | None,
     declared_grains: list[str],
     col_types: dict[str, str],
+    time_axis: str | None,
 ) -> tuple[list[str], list[str], str | None]:
-    """Rewrite the temporal dimension to DATE_TRUNC(<unit>, col) when a grain is requested.
+    """Rewrite the time axis to DATE_TRUNC(<unit>, col) when a grain applies.
 
     Returns (select_dims, group_dims, error).
     - select_dims: SELECT-list form; the bucketed dimension carries an `AS col` alias.
     - group_dims: GROUP BY form; the bucketed dimension is the bare DATE_TRUNC
       expression (Trino rejects GROUP BY on an output alias).
     - error is set (and dims returned unchanged) if the requested grain is invalid,
-      not declared on the metric, or there's no temporal dimension to bucket.
+      not declared on the metric, or the time axis isn't among the dimensions.
     """
     if not time_grain:
         return dimensions, dimensions, None
@@ -270,14 +335,21 @@ def _apply_time_grain(
         return (
             dimensions,
             dimensions,
-            f"time_grain '{time_grain}' not allowed; declared: {declared_grains}",
+            f"time_grain '{time_grain}' not allowed; declared: {sorted(declared_grains)}",
         )
-    target = _pick_temporal_dimension(dimensions, col_types)
-    if target is None:
-        return dimensions, dimensions, "No temporal dimension available to apply time_grain"
-    trunc = f"DATE_TRUNC('{unit}', {target})"
-    select_dims = [f"{trunc} AS {target}" if d == target else d for d in dimensions]
-    group_dims = [trunc if d == target else d for d in dimensions]
+    if not time_axis:
+        return dimensions, dimensions, (
+            "No time axis available to apply time_grain — set the metric's "
+            "time_grain_column, or include a date/timestamp column in its grain"
+        )
+    if time_axis not in dimensions:
+        return dimensions, dimensions, (
+            f"time_grain '{time_grain}' applies to time axis '{time_axis}', "
+            f"which is not among the queried dimensions {dimensions}"
+        )
+    trunc = f"DATE_TRUNC('{unit}', {time_axis})"
+    select_dims = [f"{trunc} AS {time_axis}" if d == time_axis else d for d in dimensions]
+    group_dims = [trunc if d == time_axis else d for d in dimensions]
     return select_dims, group_dims, None
 
 
@@ -493,15 +565,36 @@ def compile_metric(
     # Output (alias) names stay the plain dimension columns even after bucketing,
     # so ORDER BY can reference them regardless of DATE_TRUNC rewriting.
     dimension_names = list(dimensions)
-    # Apply time-grain bucketing (DATE_TRUNC) to the temporal dimension if requested.
+    # Apply time-grain bucketing (DATE_TRUNC) to the metric's governed time axis.
     group_dimensions = list(dimensions)
-    if time_grain and dimensions and table:
+    declared = list(metric.get("time_grains") or [])
+    if dimensions and table:
         col_types = _fetch_column_types(table, graph)
         for j in joins:
             col_types |= _fetch_column_types(j.table, graph)
-        declared = list(metric.get("time_grains") or [])
+        time_axis = _resolve_time_axis(metric, col_types)
+
+        # Refuse dimensions that slice by time outside the governed axis.
+        bypass_err = _check_time_axis_bypass(dimensions, time_axis, declared, col_types)
+        if bypass_err:
+            return CompilationResult(
+                sql="", source_table=table, metric_name=name,
+                is_valid=False, errors=[bypass_err],
+            )
+
+        # A metric that restricts grains is always served at one of them: when the
+        # caller names no grain, fall back to the coarsest declared rather than
+        # leaking the finer base grain. Skipped for semi-additive sums, where any
+        # cross-time rollup is invalid — those stay at base grain instead of
+        # auto-applying a grain the check below would then reject.
+        aggregation = (metric.get("aggregation") or "additive").lower()
+        semi_additive_sum = aggregation == "semi_additive" and _expr_is_sum(expression)
+        effective_grain = time_grain
+        if not effective_grain and declared and time_axis in dimensions and not semi_additive_sum:
+            effective_grain = _default_time_grain(declared)
+
         select_dims, group_dims, tg_err = _apply_time_grain(
-            dimensions, time_grain, declared, col_types
+            dimensions, effective_grain, declared, col_types, time_axis
         )
         if tg_err:
             return CompilationResult(
@@ -510,8 +603,7 @@ def compile_metric(
             )
         # Semi-additive measures (point-in-time snapshots) cannot be SUMmed across
         # time — bucketing a daily balance up to month double-counts. Reject it.
-        aggregation = (metric.get("aggregation") or "additive").lower()
-        if aggregation == "semi_additive" and _expr_is_sum(expression):
+        if effective_grain and semi_additive_sum:
             return CompilationResult(
                 sql="", source_table=table, metric_name=name,
                 is_valid=False,
@@ -610,6 +702,7 @@ def _fetch_metric_def(metric_id: str, graph: GraphClient) -> dict | None:
         "m.parameters_json AS parameters_json, "
         "m.type AS type, m.base_metrics AS base_metrics, "
         "m.grain AS grain, m.time_grains AS time_grains, "
+        "COALESCE(m.time_grain_column, '') AS time_grain_column, "
         "COALESCE(m.aggregation, 'additive') AS aggregation, "
         "COALESCE(m.value_type, 'number') AS value_type, COALESCE(m.unit, '') AS unit, "
         "t.full_name AS table_name",
@@ -626,6 +719,8 @@ def _compile_metric_cte(
     metric: dict,
     dimensions: list[str],
     cte_alias: str,
+    graph: GraphClient | None = None,
+    time_grain: str | None = None,
 ) -> str:
     """Compile a single metric into a CTE body (the SELECT inside WITH ... AS (...))."""
     table = metric.get("source_table") or metric.get("table_name", "")
@@ -633,6 +728,28 @@ def _compile_metric_cte(
     name = metric.get("name", "value")
     metric_filters = metric.get("metric_filters") or []
     joins = _parse_joins_json(metric.get("joins_json"))
+    group_dimensions = list(dimensions)
+
+    # Bucket this metric's governed time axis so each CTE aggregates at the same grain.
+    if graph is not None and dimensions and table:
+        col_types = _fetch_column_types(table, graph)
+        for j in joins:
+            col_types |= _fetch_column_types(j.table, graph)
+        declared = list(metric.get("time_grains") or [])
+        time_axis = _resolve_time_axis(metric, col_types)
+        bypass_err = _check_time_axis_bypass(dimensions, time_axis, declared, col_types)
+        if bypass_err:
+            raise _UnsafeMetricError(bypass_err)
+        effective_grain = time_grain
+        if not effective_grain and declared and time_axis in dimensions:
+            effective_grain = _default_time_grain(declared)
+        select_dims, group_dims, tg_err = _apply_time_grain(
+            dimensions, effective_grain, declared, col_types, time_axis
+        )
+        if tg_err:
+            raise _UnsafeMetricError(f"Metric '{name}': {tg_err}")
+        dimensions = select_dims
+        group_dimensions = group_dims
 
     # Reject unsafe alias / expression / stored predicates before inlining them.
     if not _IDENTIFIER_RE.match(str(name)):
@@ -670,8 +787,8 @@ def _compile_metric_cte(
     if metric_filters:
         sql += f"\n  WHERE {' AND '.join(metric_filters)}"
 
-    if dimensions:
-        sql += f"\n  GROUP BY {', '.join(dimensions)}"
+    if group_dimensions:
+        sql += f"\n  GROUP BY {', '.join(group_dimensions)}"
 
     return sql
 
@@ -745,6 +862,7 @@ def compose_metrics(
     filters: list[FilterClause] | None = None,
     order_by: list[str] | None = None,
     limit: int | None = None,
+    time_grain: str | None = None,
 ) -> CompilationResult:
     """Compose multiple metrics into a single CTE-based SQL query.
 
@@ -765,6 +883,7 @@ def compose_metrics(
         return compile_metric(
             metric_ids[0], graph, dimensions=dimensions,
             filters=filters, order_by=order_by, limit=limit,
+            time_grain=time_grain,
         )
 
     # Fetch all metric definitions
@@ -822,7 +941,9 @@ def compose_metrics(
         used_cte_names.add(cte_name)
 
         try:
-            cte_body = _compile_metric_cte(mdef, dimensions, cte_name)
+            cte_body = _compile_metric_cte(
+                mdef, dimensions, cte_name, graph=graph, time_grain=time_grain
+            )
         except _UnsafeMetricError as e:
             return CompilationResult(
                 sql="", source_table=mdef.get("source_table", ""),

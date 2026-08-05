@@ -97,6 +97,7 @@ def load_metrics(
             "synonyms": m.synonyms,
             "synonyms_text": " ".join(m.synonyms),
             "time_grains": m.time_grains,
+            "time_grain_column": m.time_grain_column,
             "source_table": m.source_table,
             "joins_json": joins_json,
             "parameters_json": parameters_json,

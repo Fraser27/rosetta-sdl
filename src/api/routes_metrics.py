@@ -91,6 +91,7 @@ class MetricCreateRequest(BaseModel):
     filters: list[str] = Field(default_factory=list)
     parameters: list[MetricParameter] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
+    time_grain_column: str = Field(default="", description="The date/timestamp column time_grains applies to; empty falls back to the first temporal column in grain")
     aggregation: str = "additive"  # additive | semi_additive | non_additive
     value_type: str = "number"  # number | currency | percent | ratio | count | duration
     unit: str = ""
@@ -384,6 +385,7 @@ def _save_metric(
         "grain": req.grain,
         "filters": req.filters,
         "time_grains": req.time_grains,
+        "time_grain_column": req.time_grain_column,
         "aggregation": req.aggregation,
         "value_type": req.value_type,
         "unit": req.unit,
@@ -548,6 +550,7 @@ async def restore_metric_version(metric_id: str, version: int, http_request: Req
         filters=v.get("filters") or [],
         parameters=[MetricParameter(**p) for p in _parse_parameters(v.get("parameters_json"))],
         time_grains=v.get("time_grains") or [],
+        time_grain_column=v.get("time_grain_column") or "",
         aggregation=v.get("aggregation") or "additive",
         value_type=v.get("value_type") or "number",
         unit=v.get("unit") or "",

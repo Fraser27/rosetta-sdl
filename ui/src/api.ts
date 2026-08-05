@@ -95,6 +95,7 @@ export interface Metric {
   parameters?: MetricParameter[];
   filters?: string[];
   time_grains?: string[];
+  time_grain_column?: string;
   aggregation?: string;
   value_type?: string;
   unit?: string;
