@@ -10,6 +10,7 @@ metrics:
     source_table: "ecommerce.orders"
     filters: ["status != 'cancelled'"]
     grain: ["order_date"]
+    time_grain_column: "order_date"
     time_grains: ["day", "week", "month", "quarter", "year"]
     owner: "analytics-team"
 
@@ -22,6 +23,7 @@ metrics:
     source_table: "ecommerce.orders"
     filters: ["status != 'cancelled'"]
     grain: ["order_date"]
+    time_grain_column: "order_date"
     time_grains: ["day", "week", "month", "quarter", "year"]
     owner: "analytics-team"
 
@@ -46,6 +48,7 @@ metrics:
     source_table: "ecommerce.orders"
     filters: []
     grain: ["order_date"]
+    time_grain_column: "order_date"
     time_grains: ["day", "week", "month", "quarter", "year"]
     owner: "analytics-team"
 
@@ -58,6 +61,7 @@ metrics:
     source_table: "ecommerce.orders"
     filters: []
     grain: ["order_date"]
+    time_grain_column: "order_date"
     time_grains: ["day", "week", "month"]
     owner: "analytics-team"
 

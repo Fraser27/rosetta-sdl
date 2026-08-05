@@ -63,6 +63,9 @@ class MetricDefinition(BaseModel):
     grain: list[str] = Field(default_factory=list)
     parameters: list[MetricParameter] = Field(default_factory=list)
     time_grains: list[str] = Field(default_factory=list)
+    # The single date/timestamp column time_grains applies to. Empty falls back to
+    # the first temporal column in grain.
+    time_grain_column: str = ""
     # additive: safe to sum across every dimension (SUM of a flow like revenue).
     # semi_additive: additive across all dimensions EXCEPT time (a point-in-time
     #   snapshot like balance/inventory — summing across time double-counts).
@@ -111,6 +114,7 @@ class MetricSummary(BaseModel):
     synonyms: list[str] | None = Field(default_factory=list)
     grain: list[str] | None = Field(default_factory=list)
     time_grains: list[str] | None = Field(default_factory=list)
+    time_grain_column: str = ""
     aggregation: str = "additive"  # additive | semi_additive | non_additive
     value_type: str = "number"
     unit: str = ""

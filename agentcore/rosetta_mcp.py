@@ -276,6 +276,12 @@ async def get_metric_definition(metric_id: str) -> str:
         lines.append(f"Filters: {m['filters']}")
     if m.get("grain"):
         lines.append(f"Grain: {', '.join(m['grain'])}")
+    if m.get("time_grains"):
+        axis = m.get("time_grain_column") or "(first temporal column in grain)"
+        lines.append(
+            f"Time grains: {', '.join(m['time_grains'])} on '{axis}' — "
+            f"pass one as time_grain; grouping by any other time column is rejected"
+        )
     if m.get("parameters"):
         lines.append("Parameters:")
         for p in m["parameters"]:
@@ -292,6 +298,7 @@ async def execute_query(
     question: str,
     filters: str = "",
     dimensions: str = "",
+    time_grain: str = "",
     limit: int = 100,
 ) -> str:
     """Run a query against the data lake — governed metrics or natural language.
@@ -306,9 +313,14 @@ async def execute_query(
         question: Natural language question (e.g., "What was total revenue last month?")
         filters: Comma-separated filters for governed metric parameters (e.g., "user_id=user_a,status=completed")
         dimensions: Comma-separated dimension columns to GROUP BY (e.g., "order_date,category")
+        time_grain: Roll the metric's time axis up to this grain — hour|day|week|month|quarter|year.
+            Must be one of the metric's declared time_grains (see get_metric_definition).
         limit: Max rows (default 100)
     """
-    logger.info(f"execute_query: question='{question}', filters='{filters}', dims='{dimensions}'")
+    logger.info(
+        f"execute_query: question='{question}', filters='{filters}', "
+        f"dims='{dimensions}', time_grain='{time_grain}'"
+    )
     body: dict = {"question": question, "max_rows": limit}
     if filters:
         parsed_filters = []
@@ -319,6 +331,8 @@ async def execute_query(
         body["filters"] = parsed_filters
     if dimensions:
         body["dimensions"] = [d.strip() for d in dimensions.split(",")]
+    if time_grain:
+        body["time_grain"] = time_grain.strip()
 
     try:
         data = _post("/query/natural-language", body=body)
@@ -461,6 +475,7 @@ async def plan_query(
     question: str,
     filters: str = "",
     dimensions: str = "",
+    time_grain: str = "",
 ) -> str:
     """Plan a query WITHOUT executing it — returns SQL and/or vector search params.
 
@@ -481,8 +496,12 @@ async def plan_query(
         question: Natural language question (e.g., "What was total revenue last month?")
         filters: Comma-separated filters for governed metric parameters (e.g., "user_id=user_a")
         dimensions: Comma-separated dimension columns (e.g., "order_date,category")
+        time_grain: Roll the metric's time axis up to this grain — hour|day|week|month|quarter|year.
     """
-    logger.info(f"plan_query: question='{question}', filters='{filters}', dims='{dimensions}'")
+    logger.info(
+        f"plan_query: question='{question}', filters='{filters}', "
+        f"dims='{dimensions}', time_grain='{time_grain}'"
+    )
     body: dict = {"question": question}
     if filters:
         parsed_filters = []
@@ -493,6 +512,8 @@ async def plan_query(
         body["filters"] = parsed_filters
     if dimensions:
         body["dimensions"] = [d.strip() for d in dimensions.split(",")]
+    if time_grain:
+        body["time_grain"] = time_grain.strip()
     data = _post("/query/plan", body=body)
 
     lines = [

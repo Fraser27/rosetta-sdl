@@ -618,7 +618,7 @@ class TestCrossDatasourceComposition:
         assert not any("different datasources" in e for e in result.errors)
 
 
-def _time_grain_graph(time_grains, col_types=None):
+def _time_grain_graph(time_grains, col_types=None, time_grain_column="", grain=None):
     """Graph returning a revenue metric with an order_date DATE column."""
     col_types = col_types or {
         "order_id": "bigint",
@@ -636,8 +636,9 @@ def _time_grain_graph(time_grains, col_types=None):
                 "name": "total_revenue",
                 "source_table": "ecommerce.orders",
                 "table_name": "ecommerce.orders",
-                "grain": ["order_date"],
+                "grain": ["order_date"] if grain is None else grain,
                 "time_grains": time_grains,
+                "time_grain_column": time_grain_column,
                 "parameters_json": None,
             }]
         if "data_type" in cypher:  # _fetch_column_types
@@ -661,10 +662,20 @@ class TestTimeGrain:
         # GROUP BY uses the bare expression, not the output alias.
         assert "GROUP BY DATE_TRUNC('month', order_date)" in result.sql
 
-    def test_no_time_grain_leaves_dimension_raw(self):
+    def test_no_time_grain_defaults_to_coarsest_declared(self):
+        # Declared time_grains are a restriction, so a caller that names no grain is
+        # served at the coarsest declared one rather than the finer base grain.
         graph = _time_grain_graph(["day", "month"])
         result = compile_metric("m_001", graph, dimensions=["order_date"])
-        assert result.is_valid
+        assert result.is_valid, result.errors
+        assert "DATE_TRUNC('month', order_date) AS order_date" in result.sql
+        assert "GROUP BY DATE_TRUNC('month', order_date)" in result.sql
+
+    def test_no_declared_grains_leaves_dimension_raw(self):
+        # With no declared time_grains there is nothing to enforce → base grain.
+        graph = _time_grain_graph([])
+        result = compile_metric("m_001", graph, dimensions=["order_date"])
+        assert result.is_valid, result.errors
         assert "DATE_TRUNC" not in result.sql
         assert "GROUP BY order_date" in result.sql
 
@@ -685,7 +696,7 @@ class TestTimeGrain:
         assert "Unsupported time_grain" in result.errors[0]
 
     def test_no_temporal_dimension_rejected(self):
-        # Only a non-temporal dimension present → nothing to bucket.
+        # Only a non-temporal dimension present → no time axis to bucket.
         graph = _time_grain_graph(
             ["month"],
             col_types={"status": "varchar", "total_amount": "double"},
@@ -694,7 +705,7 @@ class TestTimeGrain:
             "m_001", graph, dimensions=["status"], time_grain="month"
         )
         assert not result.is_valid
-        assert "No temporal dimension" in result.errors[0]
+        assert "No time axis available" in result.errors[0]
 
     def test_empty_declared_grains_allows_any_supported(self):
         # A metric with no declared time_grains permits any supported grain.
@@ -713,6 +724,71 @@ class TestTimeGrain:
         )
         assert result.is_valid, result.errors
         assert "ORDER BY order_date" in result.sql
+
+
+class TestTimeAxisGovernance:
+    """A declared time axis is the ONLY column a caller may slice time by."""
+
+    # Mirrors a Glue-partitioned lake table: string month/year partitions sitting
+    # alongside the real date column, which is how the declared grain gets bypassed.
+    _PARTITIONED = {
+        "order_id": "bigint",
+        "order_date": "date",
+        "order_ts": "timestamp",
+        "month": "string",
+        "year": "string",
+        "total_amount": "double",
+        "status": "varchar",
+    }
+
+    def test_explicit_time_grain_column_is_the_axis(self):
+        # order_ts comes first in dimensions, but the declared axis wins.
+        graph = _time_grain_graph(
+            ["year"], col_types=self._PARTITIONED, time_grain_column="order_date",
+            grain=["order_date"],
+        )
+        result = compile_metric(
+            "m_001", graph, dimensions=["order_date"], time_grain="year"
+        )
+        assert result.is_valid, result.errors
+        assert "DATE_TRUNC('year', order_date)" in result.sql
+
+    def test_calendar_partition_column_rejected(self):
+        # GROUP BY month would report a year-only metric monthly.
+        graph = _time_grain_graph(
+            ["year"], col_types=self._PARTITIONED, time_grain_column="order_date",
+        )
+        result = compile_metric("m_001", graph, dimensions=["month"])
+        assert not result.is_valid
+        assert "not this metric's governed time axis" in result.errors[0]
+
+    def test_other_timestamp_column_rejected(self):
+        # A raw timestamp reintroduces per-second grain.
+        graph = _time_grain_graph(
+            ["year"], col_types=self._PARTITIONED, time_grain_column="order_date",
+        )
+        result = compile_metric("m_001", graph, dimensions=["order_ts"])
+        assert not result.is_valid
+        assert "not this metric's governed time axis" in result.errors[0]
+
+    def test_non_temporal_dimension_still_allowed(self):
+        # Governance targets time only — ordinary dimensions pass through.
+        graph = _time_grain_graph(
+            ["year"], col_types=self._PARTITIONED, time_grain_column="order_date",
+        )
+        result = compile_metric(
+            "m_001", graph, dimensions=["order_date", "status"], time_grain="year"
+        )
+        assert result.is_valid, result.errors
+        assert "DATE_TRUNC('year', order_date)" in result.sql
+        assert "status" in result.sql
+
+    def test_no_declared_grains_leaves_bypass_check_off(self):
+        # Nothing declared → nothing to bypass; month grouping is legitimate.
+        graph = _time_grain_graph([], col_types=self._PARTITIONED)
+        result = compile_metric("m_001", graph, dimensions=["month"])
+        assert result.is_valid, result.errors
+        assert "GROUP BY month" in result.sql
 
 
 def _aggregation_graph(aggregation, expression="SUM(total_amount)"):

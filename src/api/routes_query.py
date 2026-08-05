@@ -49,6 +49,7 @@ class NLQueryRequest(BaseModel):
     question: str
     filters: list[dict] = Field(default_factory=list, description="Explicit filters for governed metrics (e.g., [{column: 'user_id', operator: '=', value: 'user_a'}])")
     dimensions: list[str] = Field(default_factory=list, description="Dimension columns for governed metrics (e.g., ['order_date'])")
+    time_grain: str | None = Field(default=None, description="Roll the metric's time axis up to this grain (e.g. 'month'); must be one of the metric's declared time_grains")
     max_rows: int = Field(default=100, ge=1, le=1000)
     workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
@@ -95,6 +96,7 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
             request.question, route_result, graph,
             workgroup=workgroup, filters=filter_clauses,
             dimensions=request.dimensions or None,
+            time_grain=request.time_grain,
         ) if want_structured else _noop()
     )
     unstructured_coro = (
@@ -332,6 +334,7 @@ async def _handle_structured(
     workgroup: str | None = None,
     filters: list[CompilerFilter] | None = None,
     dimensions: list[str] | None = None,
+    time_grain: str | None = None,
 ) -> dict:
     """Handle the structured query path."""
     wg = workgroup or _config.athena.workgroup
@@ -357,6 +360,7 @@ async def _handle_structured(
             dimensions=dimensions,
             filters=filters,
             limit=_config.max_query_rows,
+            time_grain=time_grain,
         )
         if compiled.is_valid:
             # Firewall check
@@ -376,6 +380,15 @@ async def _handle_structured(
                 "sql": compiled.sql,
                 "results": result,
             }
+        # The metric matched but its own rules refused this request (e.g. an
+        # undeclared time_grain). Surface that instead of falling through to
+        # ungoverned LLM SQL, which would answer the question the governance
+        # just rejected — and against whatever table the LLM happens to pick.
+        raise HTTPException(
+            400,
+            f"Governed metric '{compiled.metric_name or best_metric['metric_id']}' "
+            f"cannot answer this request: {'; '.join(compiled.errors)}",
+        )
 
     # No metric match — generate SQL via LLM, grounded in the full catalog schema.
     sql = generate_sql(question, graph, _config.bedrock.query_model)
@@ -460,6 +473,7 @@ async def plan_query_endpoint(request: NLQueryRequest):
             plan.join_paths = disambiguation.join_paths
 
             # Check if a metric matches
+            governance_refused = False
             if disambiguation.metrics:
                 best_metric = disambiguation.metrics[0]
 
@@ -469,15 +483,27 @@ async def plan_query_endpoint(request: NLQueryRequest):
                     dimensions=request.dimensions or None,
                     filters=filter_clauses,
                     limit=request.max_rows,
+                    time_grain=request.time_grain,
                 )
                 if compiled.is_valid:
                     plan.intent = "metric"
                     plan.query_type = "governed"
                     plan.metric_name = compiled.metric_name
                     plan.sql = compiled.sql
+                else:
+                    # Matched a governed metric that refused this request — report it
+                    # rather than planning ungoverned SQL for the same question.
+                    plan.intent = "metric"
+                    plan.query_type = "governed"
+                    plan.metric_name = compiled.metric_name
+                    plan.error = (
+                        f"Governed metric '{compiled.metric_name or best_metric['metric_id']}' "
+                        f"cannot answer this request: {'; '.join(compiled.errors)}"
+                    )
+                    governance_refused = True
 
             # No metric match — generate SQL via LLM, grounded in the full catalog schema.
-            if not plan.sql:
+            if not plan.sql and not governance_refused:
                 sql = generate_sql(request.question, graph, _config.bedrock.query_model)
                 plan.intent = "analytical"
                 plan.query_type = "ungoverned"
@@ -600,6 +626,7 @@ class ComposeRequest(BaseModel):
     filters: list[dict] = Field(default_factory=list)
     order_by: list[str] = Field(default_factory=list)
     limit: int | None = None
+    time_grain: str | None = Field(default=None, description="Roll each metric's time axis up to this grain; must be declared on the metrics")
     execute: bool = False
     workgroup: str | None = Field(default=None, description="Athena workgroup override (defaults to config value, or 'primary')")
 
@@ -625,6 +652,7 @@ async def compose_metrics_endpoint(request: ComposeRequest, http_request: Reques
         filters=filter_clauses,
         order_by=request.order_by,
         limit=request.limit or _config.max_query_rows,
+        time_grain=request.time_grain,
     )
 
     if not compiled.is_valid:
