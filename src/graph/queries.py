@@ -101,11 +101,18 @@ MERGE (c:SystemConfig {key: $key})
 SET c.enrichment_model = $enrichment_model
 """
 
+# Set only the ungoverned-query kill switch, preserving the others.
+UPSERT_BLOCK_UNGOVERNED = """
+MERGE (c:SystemConfig {key: $key})
+SET c.block_ungoverned_queries = $block_ungoverned_queries
+"""
+
 GET_SYSTEM_CONFIG = """
 MATCH (c:SystemConfig {key: $key})
 RETURN c.query_model AS query_model,
        c.s3vectors_embedding_model AS s3vectors_embedding_model,
-       c.enrichment_model AS enrichment_model
+       c.enrichment_model AS enrichment_model,
+       c.block_ungoverned_queries AS block_ungoverned_queries
 """
 
 MERGE_TABLE = """
@@ -488,7 +495,7 @@ RETURN total, embedded
 
 GRAPH_DATA = """
 MATCH (n)
-WHERE NOT n:AuditEvent AND NOT n:SystemConfig
+WHERE NOT n:AuditEvent AND NOT n:SystemConfig AND NOT n:BlockedQuery
 WITH n, labels(n)[0] AS lbl, id(n) AS nid
 RETURN collect({
     id: toString(nid),
@@ -520,8 +527,8 @@ RETURN collect({
 
 GRAPH_EDGES = """
 MATCH (a)-[r]->(b)
-WHERE NOT a:AuditEvent AND NOT a:SystemConfig
-  AND NOT b:AuditEvent AND NOT b:SystemConfig
+WHERE NOT a:AuditEvent AND NOT a:SystemConfig AND NOT a:BlockedQuery
+  AND NOT b:AuditEvent AND NOT b:SystemConfig AND NOT b:BlockedQuery
 WITH a, r, b, labels(a)[0] AS albl, labels(b)[0] AS blbl
 RETURN collect({
     source: toString(id(a)),

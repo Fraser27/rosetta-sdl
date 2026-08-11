@@ -251,6 +251,13 @@ export const api = {
     request<{ ok: boolean; s3vectors_model: string }>('/admin/config/s3vectors-model', {
       method: 'PUT', body: JSON.stringify({ s3vectors_model }),
     }),
+  getBlockUngoverned: () => request<{ block_ungoverned_queries: boolean }>('/admin/config/block-ungoverned'),
+  setBlockUngoverned: (block_ungoverned_queries: boolean) =>
+    request<{ ok: boolean; block_ungoverned_queries: boolean }>('/admin/config/block-ungoverned', {
+      method: 'PUT', body: JSON.stringify({ block_ungoverned_queries }),
+    }),
+  blockedQueries: () =>
+    request<{ blocked_queries: BlockedQuery[]; count: number; limit: number }>('/admin/blocked-queries'),
   getEnrichmentModel: () => request<{ enrichment_model: string }>('/admin/config/enrichment-model'),
   setEnrichmentModel: (enrichment_model: string) =>
     request<{ ok: boolean; enrichment_model: string }>('/admin/config/enrichment-model', {
@@ -300,6 +307,15 @@ export interface EmbeddingStats {
   enabled: boolean;
   model_id: string;
   dimensions: number;
+}
+
+export interface BlockedQuery {
+  event_id: string;
+  timestamp: string;
+  user: string;
+  question: string;
+  route: string;
+  reason: string;
 }
 
 export interface SimilarityTestHit {

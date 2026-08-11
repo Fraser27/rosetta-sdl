@@ -13,6 +13,7 @@ from src.constants import (
     AVAILABLE_QUERY_MODELS,
     SYSTEM_CONFIG_KEY,
 )
+from src.governance import BLOCKED_QUERY_HISTORY_LIMIT, list_blocked_queries
 from src.graph import queries
 from src.discovery.enrichment import (
     enrich_documents,
@@ -310,6 +311,7 @@ async def get_config():
         "max_query_rows": _config.max_query_rows,
         "enrichment_model": _config.bedrock.enrichment_model,
         "query_model": _config.bedrock.query_model,
+        "block_ungoverned_queries": _config.block_ungoverned_queries,
         "embedding": {
             "enabled": _config.embedding.enabled,
             "model_id": _config.embedding.model_id,
@@ -420,3 +422,43 @@ async def set_enrichment_model(req: EnrichmentModelUpdate):
     _config.bedrock.enrichment_model = model_id
     logger.info("Enrichment model set to %s", model_id)
     return {"ok": True, "enrichment_model": model_id}
+
+
+@router.get("/config/block-ungoverned")
+async def get_block_ungoverned():
+    """Return whether ungoverned (LLM-generated) SQL is blocked."""
+    return {"block_ungoverned_queries": _config.block_ungoverned_queries}
+
+
+class BlockUngovernedUpdate(BaseModel):
+    block_ungoverned_queries: bool
+
+
+@router.put("/config/block-ungoverned")
+async def set_block_ungoverned(req: BlockUngovernedUpdate):
+    """Turn the ungoverned-query kill switch on or off.
+
+    When on, questions matching no approved governed metric are refused instead
+    of answered by the LLM. Persisted to Neo4j and applied in-memory immediately
+    (config is shared by reference across routers), so it takes effect without a
+    restart and survives one.
+    """
+    enabled = req.block_ungoverned_queries
+    _get_graph().write(queries.UPSERT_BLOCK_UNGOVERNED, {
+        "key": SYSTEM_CONFIG_KEY,
+        "block_ungoverned_queries": enabled,
+    })
+    _config.block_ungoverned_queries = enabled
+    logger.info("Ungoverned queries are now %s", "BLOCKED" if enabled else "allowed")
+    return {"ok": True, "block_ungoverned_queries": enabled}
+
+
+@router.get("/blocked-queries")
+async def get_blocked_queries():
+    """Return the most recently blocked ungoverned queries (capped history)."""
+    queries_list = list_blocked_queries(_get_graph())
+    return {
+        "blocked_queries": queries_list,
+        "count": len(queries_list),
+        "limit": BLOCKED_QUERY_HISTORY_LIMIT,
+    }

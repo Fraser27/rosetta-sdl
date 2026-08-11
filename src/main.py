@@ -57,6 +57,12 @@ try:
         if rows[0].get("enrichment_model"):
             config.bedrock.enrichment_model = rows[0]["enrichment_model"]
             logger.info("Loaded persisted enrichment model: %s", config.bedrock.enrichment_model)
+        if rows[0].get("block_ungoverned_queries") is not None:
+            config.block_ungoverned_queries = bool(rows[0]["block_ungoverned_queries"])
+            logger.info(
+                "Ungoverned queries are %s",
+                "BLOCKED" if config.block_ungoverned_queries else "allowed",
+            )
 except Exception as e:
     logger.warning("Could not load persisted system config: %s", e)
 

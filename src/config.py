@@ -88,6 +88,10 @@ class SemanticLayerConfig:
     metrics_file: str = ""
     allowed_tables: list[str] = field(default_factory=list)
     max_query_rows: int = 500
+    # When true, questions matching no governed metric are refused instead of
+    # answered with LLM-generated SQL. Toggled from the Governance page and
+    # persisted on the :SystemConfig node, so it survives restarts.
+    block_ungoverned_queries: bool = False
 
 
 def load_config(config_path: str | None = None) -> SemanticLayerConfig:

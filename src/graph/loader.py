@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.graph import queries
@@ -83,9 +84,18 @@ def load_metrics(
     """Load metric definitions into the graph. Returns count."""
     import json
 
+    now = datetime.now(timezone.utc).isoformat()
+
     for m in metrics:
         joins_json = json.dumps([j.model_dump() for j in m.joins]) if m.joins else "[]"
         parameters_json = json.dumps([p.model_dump() for p in m.parameters]) if m.parameters else "[]"
+        # A re-scan must not silently reset a metric's lifecycle state, so read the
+        # current status/version and carry it forward. GET_METRIC_GOVERNANCE
+        # COALESCEs a missing status to 'approved', which is also the right default
+        # for a brand-new YAML metric: the file IS the curated source of truth, and
+        # NL routing only serves approved metrics, so defaulting to 'draft' would
+        # make every YAML metric unreachable.
+        gov = graph.query(queries.GET_METRIC_GOVERNANCE, {"metric_id": m.metric_id})
         graph.write(queries.MERGE_METRIC, {
             "metric_id": m.metric_id,
             "name": m.name,
@@ -99,6 +109,14 @@ def load_metrics(
             "time_grains": m.time_grains,
             "time_grain_column": m.time_grain_column,
             "source_table": m.source_table,
+            "aggregation": m.aggregation,
+            "value_type": m.value_type,
+            "unit": m.unit,
+            "format": m.format,
+            "status": gov[0]["status"] if gov else "approved",
+            "version": int(gov[0]["version"]) if gov else 1,
+            "updated_by": m.owner or "yaml",
+            "updated_at": now,
             "joins_json": joins_json,
             "parameters_json": parameters_json,
             "base_metrics": m.base_metrics,
