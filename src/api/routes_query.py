@@ -14,6 +14,7 @@ from src.config import SemanticLayerConfig
 from src.constants import DEFAULT_DATASOURCE_ID
 from src.executors.base import HealthStatus
 from src.executors.registry import registry
+from src.governance import BLOCK_REASON, record_blocked_query
 from src.graph.client import GraphClient
 from src.metrics.compiler import compile_metric, compose_metrics, FilterClause as CompilerFilter
 from src.query.athena_executor import execute_query, execute_query as athena_execute_query
@@ -97,6 +98,7 @@ async def natural_language_query(request: NLQueryRequest, http_request: Request)
             workgroup=workgroup, filters=filter_clauses,
             dimensions=request.dimensions or None,
             time_grain=request.time_grain,
+            user=user,
         ) if want_structured else _noop()
     )
     unstructured_coro = (
@@ -335,6 +337,7 @@ async def _handle_structured(
     filters: list[CompilerFilter] | None = None,
     dimensions: list[str] | None = None,
     time_grain: str | None = None,
+    user: str = "unknown",
 ) -> dict:
     """Handle the structured query path."""
     wg = workgroup or _config.athena.workgroup
@@ -389,6 +392,15 @@ async def _handle_structured(
             f"Governed metric '{compiled.metric_name or best_metric['metric_id']}' "
             f"cannot answer this request: {'; '.join(compiled.errors)}",
         )
+
+    # No metric match. If the ungoverned kill switch is on, refuse before calling
+    # the LLM at all — the question is recorded so admins can see which metrics
+    # users are asking for.
+    if _config.block_ungoverned_queries:
+        record_blocked_query(
+            graph, question=question, user=user, route=route_result.route,
+        )
+        raise HTTPException(403, BLOCK_REASON)
 
     # No metric match — generate SQL via LLM, grounded in the full catalog schema.
     sql = generate_sql(question, graph, _config.bedrock.query_model)
@@ -448,13 +460,14 @@ async def direct_sql_query(request: SQLQueryRequest, http_request: Request):
 
 
 @router.post("/plan", response_model=QueryPlan)
-async def plan_query_endpoint(request: NLQueryRequest):
+async def plan_query_endpoint(request: NLQueryRequest, http_request: Request):
     """Plan a query without executing it.
 
     Returns the SQL, route, matched tables, join paths, and vector search params
     so an external agent can execute them via separate MCP servers (Athena, S3Vectors).
     """
     graph = _get_graph()
+    user = user_from_request(http_request)
 
     route_result = route_query(request.question, graph, embedding_config=_config.embedding)
     plan = QueryPlan(route=route_result.route)
@@ -501,6 +514,19 @@ async def plan_query_endpoint(request: NLQueryRequest):
                         f"cannot answer this request: {'; '.join(compiled.errors)}"
                     )
                     governance_refused = True
+
+            # No metric match. Honour the same kill switch as execution — planning
+            # ungoverned SQL here would hand an agent the very query the block is
+            # meant to prevent, for it to run on its own executor.
+            if not plan.sql and not governance_refused and _config.block_ungoverned_queries:
+                record_blocked_query(
+                    graph, question=request.question, user=user,
+                    route=route_result.route,
+                )
+                plan.intent = "analytical"
+                plan.query_type = "ungoverned"
+                plan.error = BLOCK_REASON
+                governance_refused = True
 
             # No metric match — generate SQL via LLM, grounded in the full catalog schema.
             if not plan.sql and not governance_refused:
