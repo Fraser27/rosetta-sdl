@@ -753,6 +753,52 @@ class TestTimeAxisGovernance:
         assert result.is_valid, result.errors
         assert "DATE_TRUNC('year', order_date)" in result.sql
 
+    def test_time_grain_without_dimensions_adds_the_axis(self):
+        """A bare time_grain must produce a time series, not a single total.
+
+        Regression: the time-grain block was gated on `dimensions` being non-empty,
+        so `time_grain` alone was silently dropped and the caller got the ungrouped
+        aggregate — one row, no error, no indication the argument was ignored.
+        """
+        graph = _time_grain_graph(
+            ["day", "month", "year"], time_grain_column="order_date", grain=[],
+        )
+        result = compile_metric("m_001", graph, time_grain="month")
+        assert result.is_valid, result.errors
+        assert "DATE_TRUNC('month', order_date) AS order_date" in result.sql
+        assert "GROUP BY DATE_TRUNC('month', order_date)" in result.sql
+
+    def test_time_grain_appends_axis_alongside_other_dimensions(self):
+        graph = _time_grain_graph(
+            ["month"], time_grain_column="order_date", grain=[],
+            col_types={"order_date": "date", "status": "varchar", "total_amount": "double"},
+        )
+        result = compile_metric(
+            "m_001", graph, dimensions=["status"], time_grain="month"
+        )
+        assert result.is_valid, result.errors
+        assert "status" in result.sql
+        assert "DATE_TRUNC('month', order_date)" in result.sql
+
+    def test_no_time_grain_and_no_dimensions_stays_ungrouped(self):
+        """The axis is only auto-added for an *explicit* grain request."""
+        graph = _time_grain_graph(
+            ["day", "month"], time_grain_column="order_date", grain=[],
+        )
+        result = compile_metric("m_001", graph)
+        assert result.is_valid, result.errors
+        assert "GROUP BY" not in result.sql
+        assert "DATE_TRUNC" not in result.sql
+
+    def test_undeclared_time_grain_without_dimensions_refused(self):
+        """Reaching the grain logic must not weaken its validation."""
+        graph = _time_grain_graph(
+            ["year"], time_grain_column="order_date", grain=[],
+        )
+        result = compile_metric("m_001", graph, time_grain="month")
+        assert not result.is_valid
+        assert any("not allowed" in e for e in result.errors)
+
     def test_calendar_partition_column_rejected(self):
         # GROUP BY month would report a year-only metric monthly.
         graph = _time_grain_graph(

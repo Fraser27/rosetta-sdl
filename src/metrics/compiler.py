@@ -565,14 +565,27 @@ def compile_metric(
     # Output (alias) names stay the plain dimension columns even after bucketing,
     # so ORDER BY can reference them regardless of DATE_TRUNC rewriting.
     dimension_names = list(dimensions)
-    # Apply time-grain bucketing (DATE_TRUNC) to the metric's governed time axis.
     group_dimensions = list(dimensions)
+    # Apply time-grain bucketing (DATE_TRUNC) to the metric's governed time axis.
     declared = list(metric.get("time_grains") or [])
-    if dimensions and table:
+    # An explicit time_grain must be honoured even with no dimensions: asking for a
+    # monthly series is asking to group by month. Previously this branch was skipped
+    # whenever dimensions was empty, so the grain was dropped and the caller silently
+    # received the single ungrouped aggregate instead of a time series.
+    if table and (dimensions or time_grain):
         col_types = _fetch_column_types(table, graph)
         for j in joins:
             col_types |= _fetch_column_types(j.table, graph)
         time_axis = _resolve_time_axis(metric, col_types)
+
+        # A requested grain implies grouping by the axis it applies to, so add it
+        # rather than refusing over an argument the caller shouldn't need to repeat.
+        # Only for an explicit request: the coarsest-grain default below must not
+        # invent a time dimension the caller never asked to slice by.
+        if time_grain and time_axis and time_axis not in dimensions:
+            dimensions = [*dimensions, time_axis]
+            dimension_names = list(dimensions)
+            group_dimensions = list(dimensions)
 
         # Refuse dimensions that slice by time outside the governed axis.
         bypass_err = _check_time_axis_bypass(dimensions, time_axis, declared, col_types)
