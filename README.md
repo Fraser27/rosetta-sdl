@@ -164,19 +164,24 @@ npm run dev
 
 ### 5. Connect your AI agent via MCP
 
-Add to `.mcp.json`:
+The MCP server is a thin HTTP client over the API — it exposes 9 tools and needs
+**no credentials** when `ALLOW_INSECURE_NO_AUTH=1` is set locally (it only sends an
+`Authorization` header if the Cognito variables below are populated).
 
-```json
-{
-  "mcpServers": {
-    "rosetta-sdl": {
-      "command": "python",
-      "args": ["-m", "src.mcp.server"],
-      "env": { "API_URL": "http://localhost:8000" }
-    }
-  }
-}
+Pick the transport your client expects:
+
+**HTTP clients (Claude Code):**
+
+```bash
+# rosetta_mcp.py pins port 8000 at import — the same port the API uses — so
+# override it before starting. See "Running the MCP server locally" below.
+MCP_PORT=8901 API_URL=http://localhost:8000 python3 agentcore/run_local.py &
+
+claude mcp add --transport http rosetta-local http://127.0.0.1:8901/mcp
 ```
+
+**Subprocess/stdio clients (Amazon Quick Suite, Claude Desktop):** see
+[Amazon Quick Suite](#amazon-quick-suite-paste-json-config) below.
 
 Then ask:
 
@@ -185,6 +190,67 @@ Then ask:
 > what is total revenue by customer segment?
 > show me the schema for the orders table
 ```
+
+### Amazon Quick Suite (Paste JSON config)
+
+Quick Suite launches the server as a subprocess and speaks stdio, so paste this into its
+**Paste JSON config** dialog. There is **nothing to authenticate** — no API key, no token:
+
+```json
+{
+  "command": "/absolute/path/to/python3",
+  "args": ["/absolute/path/to/rosetta-sdl/agentcore/run_stdio.py"],
+  "env": {
+    "API_URL": "http://localhost:8000",
+    "ROSETTA_REPO": "/absolute/path/to/rosetta-sdl"
+  }
+}
+```
+
+Fill in the two absolute paths first:
+
+```bash
+python3 -c 'import sys; print(sys.executable)'   # -> "command"
+pwd                                              # -> repo path for "args" + ROSETTA_REPO
+```
+
+Both **must be absolute**. GUI apps don't inherit your shell `PATH`, so a bare `python3`
+— or a mise/pyenv shim — fails to launch with no useful error.
+
+Requirements and gotchas:
+
+- **The API must be running** at `API_URL` (`docker-compose up -d`). Every tool proxies to
+  it; if the container is down, all 9 tools fail.
+- **`http://localhost:8000` only works if Quick Suite runs on this machine.** A
+  cloud-hosted client cannot reach your loopback — use the
+  [AgentCore Gateway](#deploy-to-agentcore) instead.
+- Don't pass the Cognito variables; leaving them unset is what keeps this auth-free.
+
+### Running the MCP server locally
+
+`agentcore/rosetta_mcp.py` is written for AgentCore Runtime: it builds `FastMCP()` at
+import time without a port (defaulting to **8000**, which the API already occupies) and
+hardcodes `transport="streamable-http"`. Setting `FASTMCP_PORT` does not help, because
+the settings object is constructed before the environment variable is read. Two thin
+launchers wrap it without modifying the deployed file:
+
+| Launcher | Transport | Use with |
+|----------|-----------|----------|
+| `agentcore/run_local.py` | streamable-http on `$MCP_PORT` (default 8901) | Claude Code, any HTTP client |
+| `agentcore/run_stdio.py` | stdio | Amazon Quick Suite, Claude Desktop |
+
+Both import the same `mcp` instance, so all 9 tools behave identically. Set
+`ROSETTA_REPO` if you run them from outside the repository.
+
+> **Local only.** These launchers bind to `127.0.0.1` and the MCP server performs **no
+> inbound authentication** — anything that can reach the port can query your data lake.
+> Do not bind to `0.0.0.0` or expose the port. A cloud-hosted client cannot reach
+> `localhost`; use the [AgentCore Gateway](#deploy-to-agentcore) (Cognito-authenticated)
+> for that instead.
+
+> **Note:** `src/mcp/server.py` is an older duplicate of the same 9 tools and currently
+> fails on `mcp>=1.26` (`FastMCP.__init__() got an unexpected keyword argument
+> 'description'`). Prefer `agentcore/rosetta_mcp.py` via the launchers above.
 
 ---
 
@@ -676,6 +742,8 @@ rosetta-sdl/
 │       └── server.py            # MCP adapter (8 tools, stdio transport)
 ├── agentcore/                   # AgentCore deployment
 │   ├── rosetta_mcp.py           # MCP server for AgentCore Runtime (streamable-http)
+│   ├── run_local.py             # Local launcher — http on $MCP_PORT (Claude Code)
+│   ├── run_stdio.py             # Local launcher — stdio (Amazon Quick Suite, Claude Desktop)
 │   ├── deploy_agent.py          # Standalone deploy script (interactive/non-interactive)
 │   ├── deploy_to_agentcore.ipynb# Workshop notebook (step-by-step)
 │   ├── ac_utils.py              # IAM roles, Cognito setup helpers
@@ -989,7 +1057,11 @@ curl -s -X POST http://localhost:8000/admin/enrich | python3 -m json.tool
 ### Claude Code MCP Setup
 
 ```bash
-# Add MCP proxy for AgentCore Gateway
+# Local, no auth — needs the API running on :8000 (see "Connect your AI agent via MCP")
+MCP_PORT=8901 API_URL=http://localhost:8000 python3 agentcore/run_local.py &
+claude mcp add --transport http rosetta-local http://127.0.0.1:8901/mcp
+
+# Deployed AgentCore Gateway (Cognito-authenticated)
 claude mcp add -t stdio rosetta-gw node /path/to/agentcore/mcp-proxy.mjs
 ```
 
@@ -1001,6 +1073,9 @@ claude mcp add -t stdio rosetta-gw node /path/to/agentcore/mcp-proxy.mjs
 | 503 on any API | Graph client not initialized | Check Neo4j container is running |
 | 401 Unauthorized | Expired or missing JWT token | Re-login via Cognito hosted UI |
 | Metrics return empty | Graph not seeded | Run `POST /admin/scan` or seed demo data |
+| MCP server won't start (`address already in use`) | `rosetta_mcp.py` pins port 8000, same as the API | Use `agentcore/run_local.py` with `MCP_PORT` |
+| MCP tools fail in a GUI client | Relative `command` — GUI apps don't inherit shell `PATH` | Use absolute paths from `python3 -c 'import sys; print(sys.executable)'` |
+| Every MCP tool errors at once | API not running at `API_URL` | `docker-compose up -d`, then check `/health` |
 
 ---
 
