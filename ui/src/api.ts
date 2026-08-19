@@ -329,6 +329,7 @@ export interface SimilarityTestHit {
 
 export interface SimilarityTestResult {
   question: string;
+  fulltext_query: string;
   fulltext_results: SimilarityTestHit[];
   vector_results: SimilarityTestHit[];
   resolution: string;

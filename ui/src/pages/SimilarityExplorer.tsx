@@ -99,6 +99,12 @@ export default function SimilarityExplorer() {
               <div style={{ fontSize: 11, color: 'var(--text-dim)', textAlign: 'right' }}>
                 <div>FT threshold: {result.thresholds.fulltext_confidence}</div>
                 <div>Vector min: {result.thresholds.vector_min_score}</div>
+                <div>
+                  Searched:{' '}
+                  {result.fulltext_query
+                    ? <code>{result.fulltext_query}</code>
+                    : <em>no content words</em>}
+                </div>
               </div>
             </div>
           </div>
