@@ -43,16 +43,24 @@ def disambiguate(
     # terms, so full-text is skipped entirely and the vector fallback decides.
     ft_query = strip_fulltext_stopwords(question)
 
+    # This floor is the governed/ungoverned gate: if nothing clears it (and the
+    # vector fallback finds nothing either), the question falls through to LLM SQL.
+    min_score = (
+        embedding_config.metric_match_min_score
+        if embedding_config
+        else EmbeddingConfig.metric_match_min_score
+    )
+
     metric_hits = (
         graph.query(
             "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-            "WHERE score > 0.3 AND COALESCE(node.status, 'approved') = 'approved' "
+            "WHERE score > $min AND COALESCE(node.status, 'approved') = 'approved' "
             "WITH node AS m, score "
             "MATCH (m)-[:MEASURES]->(t:Table) "
             "RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression, "
             "t.full_name AS source_table, score "
             "ORDER BY score DESC LIMIT 5",
-            {"q": ft_query},
+            {"q": ft_query, "min": min_score},
         )
         if ft_query
         else []

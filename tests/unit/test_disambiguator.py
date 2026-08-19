@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+from src.config import EmbeddingConfig
 from src.query.disambiguator import disambiguate
 
 
@@ -101,3 +102,41 @@ class TestDisambiguator:
         disambiguate("total revenue", graph)
         assert captured, "metric_search query was not issued"
         assert "COALESCE(node.status, 'approved') = 'approved'" in captured[0]
+
+
+class TestMetricMatchThreshold:
+    def _captured_params(self, embedding_config=None):
+        captured = {}
+        graph = MagicMock()
+
+        def mock_query(cypher, params=None):
+            if "metric_search" in cypher:
+                captured.update(params or {})
+            return []
+
+        graph.query.side_effect = mock_query
+        disambiguate("total revenue", graph, embedding_config=embedding_config)
+        return captured
+
+    def test_defaults_to_config_default(self):
+        assert self._captured_params()["min"] == EmbeddingConfig.metric_match_min_score
+
+    def test_uses_configured_threshold(self):
+        cfg = EmbeddingConfig(metric_match_min_score=1.9, enabled=False)
+        assert self._captured_params(cfg)["min"] == 1.9
+
+    def test_threshold_is_parameterised_not_inlined(self):
+        """A hardcoded floor would silently ignore the admin setting."""
+        captured = []
+        graph = MagicMock()
+
+        def mock_query(cypher, params=None):
+            if "metric_search" in cypher:
+                captured.append(cypher)
+            return []
+
+        graph.query.side_effect = mock_query
+        disambiguate("total revenue", graph, embedding_config=EmbeddingConfig(enabled=False))
+        assert captured
+        assert "score > $min" in captured[0]
+        assert "score > 0.3" not in captured[0]

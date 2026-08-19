@@ -624,6 +624,7 @@ async def similarity_test(request: SimilarityTestRequest):
     # Determine which would be selected by the current routing logic
     ft_threshold = _config.embedding.fulltext_confidence_threshold
     vec_min = _config.embedding.vector_min_score
+    match_min = _config.embedding.metric_match_min_score
     best_ft = fulltext_hits[0] if fulltext_hits else None
     best_vec = vector_hits[0] if vector_hits else None
 
@@ -640,6 +641,15 @@ async def similarity_test(request: SimilarityTestRequest):
         resolution = "none"
         selected = None
 
+    # The live router (disambiguate) governs a question whenever ANY metric clears
+    # metric_match_min_score — it has no notion of a "weak" match. Report that
+    # verdict separately so this page reflects real behaviour rather than implying
+    # a weak full-text hit would fall through to ungoverned SQL.
+    would_be_governed = bool(
+        (best_ft and best_ft.get("score", 0) > match_min)
+        or (best_vec and best_vec.get("score", 0) >= vec_min)
+    )
+
     return {
         "question": request.question,
         "fulltext_query": ft_query,
@@ -647,7 +657,9 @@ async def similarity_test(request: SimilarityTestRequest):
         "vector_results": vector_hits,
         "resolution": resolution,
         "selected_metric": selected,
+        "would_be_governed": would_be_governed,
         "thresholds": {
+            "metric_match_min_score": match_min,
             "fulltext_confidence": ft_threshold,
             "vector_min_score": vec_min,
         },
