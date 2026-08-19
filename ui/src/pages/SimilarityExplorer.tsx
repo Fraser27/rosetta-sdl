@@ -95,8 +95,16 @@ export default function SimilarityExplorer() {
                     {result.selected_metric}
                   </span>
                 )}
+                <span
+                  className={`tag ${result.would_be_governed ? 'tag-green' : 'tag-orange'}`}
+                  style={{ marginLeft: 12 }}
+                  title="What the live router would actually do — it governs whenever any metric clears the metric-match minimum, with no notion of a weak match."
+                >
+                  {result.would_be_governed ? 'Live route: governed' : 'Live route: ungoverned'}
+                </span>
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-dim)', textAlign: 'right' }}>
+                <div>Metric match min: {result.thresholds.metric_match_min_score}</div>
                 <div>FT threshold: {result.thresholds.fulltext_confidence}</div>
                 <div>Vector min: {result.thresholds.vector_min_score}</div>
                 <div>

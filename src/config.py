@@ -49,6 +49,11 @@ class BedrockConfig:
 class EmbeddingConfig:
     model_id: str = "amazon.titan-embed-text-v2:0"
     dimensions: int = 1024
+    # The gate that actually decides governed vs ungoverned: a question is served by
+    # a governed metric iff some approved metric clears this Lucene score. Raise it to
+    # make governance stricter (more questions fall through to LLM SQL); lower it to
+    # catch looser phrasings at the risk of false matches.
+    metric_match_min_score: float = 0.3
     fulltext_confidence_threshold: float = 1.0  # below this Lucene score, try vector
     vector_min_score: float = 0.6  # minimum cosine similarity to accept
     enabled: bool = True  # kill-switch for vector search
@@ -157,6 +162,8 @@ def load_config(config_path: str | None = None) -> SemanticLayerConfig:
         cfg.embedding.model_id = v
     if v := os.environ.get("EMBEDDING_DIMENSIONS"):
         cfg.embedding.dimensions = int(v)
+    if v := os.environ.get("EMBEDDING_METRIC_MATCH_MIN_SCORE"):
+        cfg.embedding.metric_match_min_score = float(v)
     if v := os.environ.get("EMBEDDING_FULLTEXT_THRESHOLD"):
         cfg.embedding.fulltext_confidence_threshold = float(v)
     if v := os.environ.get("EMBEDDING_VECTOR_MIN_SCORE"):

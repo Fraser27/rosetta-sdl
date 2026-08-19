@@ -63,6 +63,14 @@ try:
                 "Ungoverned queries are %s",
                 "BLOCKED" if config.block_ungoverned_queries else "allowed",
             )
+        for key, target in (
+            ("metric_match_min_score", "metric_match_min_score"),
+            ("fulltext_confidence_threshold", "fulltext_confidence_threshold"),
+            ("vector_min_score", "vector_min_score"),
+        ):
+            if rows[0].get(key) is not None:
+                setattr(config.embedding, target, float(rows[0][key]))
+                logger.info("Loaded persisted %s: %s", key, getattr(config.embedding, target))
 except Exception as e:
     logger.warning("Could not load persisted system config: %s", e)
 

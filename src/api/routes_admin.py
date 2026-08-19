@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.config import SemanticLayerConfig
+from src.config import EmbeddingConfig, SemanticLayerConfig
 from src.constants import (
     AVAILABLE_EMBEDDING_MODELS,
     AVAILABLE_QUERY_MODELS,
@@ -316,6 +316,7 @@ async def get_config():
             "enabled": _config.embedding.enabled,
             "model_id": _config.embedding.model_id,
             "dimensions": _config.embedding.dimensions,
+            "metric_match_min_score": _config.embedding.metric_match_min_score,
             "fulltext_confidence_threshold": _config.embedding.fulltext_confidence_threshold,
             "vector_min_score": _config.embedding.vector_min_score,
         },
@@ -451,6 +452,67 @@ async def set_block_ungoverned(req: BlockUngovernedUpdate):
     _config.block_ungoverned_queries = enabled
     logger.info("Ungoverned queries are now %s", "BLOCKED" if enabled else "allowed")
     return {"ok": True, "block_ungoverned_queries": enabled}
+
+
+# Defaults, so the UI can offer a one-click reset without hardcoding them.
+_THRESHOLD_DEFAULTS = EmbeddingConfig()
+
+
+def _threshold_payload() -> dict:
+    return {
+        "metric_match_min_score": _config.embedding.metric_match_min_score,
+        "fulltext_confidence_threshold": _config.embedding.fulltext_confidence_threshold,
+        "vector_min_score": _config.embedding.vector_min_score,
+        "defaults": {
+            "metric_match_min_score": _THRESHOLD_DEFAULTS.metric_match_min_score,
+            "fulltext_confidence_threshold": _THRESHOLD_DEFAULTS.fulltext_confidence_threshold,
+            "vector_min_score": _THRESHOLD_DEFAULTS.vector_min_score,
+        },
+    }
+
+
+@router.get("/config/match-thresholds")
+async def get_match_thresholds():
+    """Return the metric-matching thresholds, plus their built-in defaults."""
+    return _threshold_payload()
+
+
+class MatchThresholdsUpdate(BaseModel):
+    # Lucene/BM25 scores are unbounded, so only a lower bound is enforced here.
+    metric_match_min_score: float = Field(ge=0)
+    fulltext_confidence_threshold: float = Field(ge=0)
+    # Cosine similarity is bounded.
+    vector_min_score: float = Field(ge=0, le=1)
+
+
+@router.put("/config/match-thresholds")
+async def set_match_thresholds(req: MatchThresholdsUpdate):
+    """Tune how readily a question is matched to a governed metric.
+
+    `metric_match_min_score` is the governed/ungoverned gate — a question is served
+    by a governed metric iff some approved metric clears it. The other two decide
+    *which* metric wins: below `fulltext_confidence_threshold` the vector fallback
+    also runs, and `vector_min_score` is the floor for accepting a vector hit.
+
+    Persisted to Neo4j and applied in-memory immediately (config is shared by
+    reference across routers), so it takes effect without a restart and survives one.
+    """
+    _get_graph().write(queries.UPSERT_MATCH_THRESHOLDS, {
+        "key": SYSTEM_CONFIG_KEY,
+        "metric_match_min_score": req.metric_match_min_score,
+        "fulltext_confidence_threshold": req.fulltext_confidence_threshold,
+        "vector_min_score": req.vector_min_score,
+    })
+    _config.embedding.metric_match_min_score = req.metric_match_min_score
+    _config.embedding.fulltext_confidence_threshold = req.fulltext_confidence_threshold
+    _config.embedding.vector_min_score = req.vector_min_score
+    logger.info(
+        "Match thresholds set: metric_match=%s fulltext_confidence=%s vector_min=%s",
+        req.metric_match_min_score,
+        req.fulltext_confidence_threshold,
+        req.vector_min_score,
+    )
+    return {"ok": True, **_threshold_payload()}
 
 
 @router.get("/blocked-queries")

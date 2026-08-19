@@ -107,12 +107,23 @@ MERGE (c:SystemConfig {key: $key})
 SET c.block_ungoverned_queries = $block_ungoverned_queries
 """
 
+# Set only the metric-matching thresholds, preserving the others.
+UPSERT_MATCH_THRESHOLDS = """
+MERGE (c:SystemConfig {key: $key})
+SET c.metric_match_min_score = $metric_match_min_score,
+    c.fulltext_confidence_threshold = $fulltext_confidence_threshold,
+    c.vector_min_score = $vector_min_score
+"""
+
 GET_SYSTEM_CONFIG = """
 MATCH (c:SystemConfig {key: $key})
 RETURN c.query_model AS query_model,
        c.s3vectors_embedding_model AS s3vectors_embedding_model,
        c.enrichment_model AS enrichment_model,
-       c.block_ungoverned_queries AS block_ungoverned_queries
+       c.block_ungoverned_queries AS block_ungoverned_queries,
+       c.metric_match_min_score AS metric_match_min_score,
+       c.fulltext_confidence_threshold AS fulltext_confidence_threshold,
+       c.vector_min_score AS vector_min_score
 """
 
 MERGE_TABLE = """

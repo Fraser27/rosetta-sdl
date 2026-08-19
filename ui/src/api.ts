@@ -258,6 +258,11 @@ export const api = {
     }),
   blockedQueries: () =>
     request<{ blocked_queries: BlockedQuery[]; count: number; limit: number }>('/admin/blocked-queries'),
+  getMatchThresholds: () => request<MatchThresholds>('/admin/config/match-thresholds'),
+  setMatchThresholds: (t: MatchThresholdValues) =>
+    request<{ ok: boolean } & MatchThresholds>('/admin/config/match-thresholds', {
+      method: 'PUT', body: JSON.stringify(t),
+    }),
   getEnrichmentModel: () => request<{ enrichment_model: string }>('/admin/config/enrichment-model'),
   setEnrichmentModel: (enrichment_model: string) =>
     request<{ ok: boolean; enrichment_model: string }>('/admin/config/enrichment-model', {
@@ -334,10 +339,22 @@ export interface SimilarityTestResult {
   vector_results: SimilarityTestHit[];
   resolution: string;
   selected_metric: string | null;
+  would_be_governed: boolean;
   thresholds: {
+    metric_match_min_score: number;
     fulltext_confidence: number;
     vector_min_score: number;
   };
+}
+
+export interface MatchThresholdValues {
+  metric_match_min_score: number;
+  fulltext_confidence_threshold: number;
+  vector_min_score: number;
+}
+
+export interface MatchThresholds extends MatchThresholdValues {
+  defaults: MatchThresholdValues;
 }
 
 export interface GraphNode {
