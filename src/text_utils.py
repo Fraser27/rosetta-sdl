@@ -22,6 +22,45 @@ logger = logging.getLogger(__name__)
 # Maximum words allowed in a table/column/document description.
 MAX_DESCRIPTION_WORDS = 50
 
+# ── Full-text query sanitisation ─────────────────────────────
+#
+# The Neo4j full-text indexes are created with the default
+# `standard-no-stop-words` analyzer, so stopwords are indexed as real terms.
+# On a small metric corpus that is actively harmful: a question phrased in
+# natural English ("what is the number OF customers?") can clear the Lucene
+# confidence threshold purely because "of" also appears in an unrelated
+# metric's definition, and IDF makes that term look discriminating. The
+# governed metric then wins before the vector path is ever consulted.
+#
+# Stripping stopwords before searching keeps scores tied to content words.
+FULLTEXT_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "can",
+        "did", "do", "does", "for", "from", "give", "had", "has", "have", "how",
+        "i", "in", "into", "is", "it", "its", "many", "me", "much", "my", "no",
+        "not", "of", "on", "or", "our", "s", "show", "so", "some", "such",
+        "t", "tell", "than", "that", "the", "their", "them", "then", "there",
+        "these", "they", "this", "to", "us", "was", "we", "were", "what",
+        "when", "where", "which", "who", "why", "will", "with", "would", "you",
+        "your",
+    }
+)
+
+# Lucene syntax characters that would otherwise be parsed as operators.
+_LUCENE_SPECIAL_RE = re.compile(r'[+\-&|!(){}\[\]^"~*?:\\/]')
+
+
+def strip_fulltext_stopwords(text: str) -> str:
+    """Reduce a natural-language question to its content words for full-text search.
+
+    Returns an empty string when nothing but stopwords remain — callers MUST treat
+    that as "no match" rather than passing it to Lucene, since an empty or
+    operator-only query is both meaningless and a syntax error.
+    """
+    cleaned = _LUCENE_SPECIAL_RE.sub(" ", text or "")
+    kept = [w for w in cleaned.split() if w.lower() not in FULLTEXT_STOPWORDS]
+    return " ".join(kept)
+
 
 def word_count(text: str) -> int:
     return len((text or "").split())
