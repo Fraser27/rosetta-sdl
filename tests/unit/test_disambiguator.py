@@ -1,6 +1,6 @@
 """Tests for the graph-based disambiguator."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.config import EmbeddingConfig
 from src.query.disambiguator import disambiguate
@@ -102,6 +102,74 @@ class TestDisambiguator:
         disambiguate("total revenue", graph)
         assert captured, "metric_search query was not issued"
         assert "COALESCE(node.status, 'approved') = 'approved'" in captured[0]
+
+
+class TestWeakFulltextVeto:
+    """A full-text hit below the confidence threshold is provisional: the vector
+    search either confirms it, replaces it, or vetoes it into the ungoverned route."""
+
+    @staticmethod
+    def _weak_hit(score: float = 0.457) -> dict:
+        return {
+            "metric_id": "m_001",
+            "name": "total_revenue",
+            "expression": "SUM(x)",
+            "source_table": "ecommerce.orders",
+            "score": score,
+        }
+
+    def _graph(self, metric_hits, vector_hits):
+        graph = MagicMock()
+
+        def mock_query(cypher, params=None):
+            if "vector.queryNodes" in cypher:
+                return vector_hits
+            if "metric_search" in cypher:
+                return metric_hits
+            return []
+
+        graph.query.side_effect = mock_query
+        return graph
+
+    def test_weak_fulltext_with_no_vector_match_goes_ungoverned(self):
+        # The reported bug: FT 0.457 < 1.1 and no vector hit above 0.77, yet the
+        # weak hit was still served as a governed answer.
+        graph = self._graph([self._weak_hit()], [])
+        cfg = EmbeddingConfig(fulltext_confidence_threshold=1.1, vector_min_score=0.77)
+        with patch("src.query.embeddings.get_embedding", return_value=[0.1] * 1024):
+            result = disambiguate("whats the total customers", graph, embedding_config=cfg)
+        assert result.metrics == []
+
+    def test_vector_match_still_wins(self):
+        strong_vec = self._weak_hit(0.81)
+        graph = self._graph([self._weak_hit()], [strong_vec])
+        cfg = EmbeddingConfig(fulltext_confidence_threshold=1.1, vector_min_score=0.77)
+        with patch("src.query.embeddings.get_embedding", return_value=[0.1] * 1024):
+            result = disambiguate("total revenue", graph, embedding_config=cfg)
+        assert [h["score"] for h in result.metrics] == [0.81]
+
+    def test_confident_fulltext_never_reaches_the_veto(self):
+        confident = self._weak_hit(2.0)
+        graph = self._graph([confident], [])
+        cfg = EmbeddingConfig(fulltext_confidence_threshold=1.1, vector_min_score=0.77)
+        result = disambiguate("total revenue", graph, embedding_config=cfg)
+        assert [h["score"] for h in result.metrics] == [2.0]
+
+    def test_embedding_failure_keeps_weak_hit(self):
+        """An embedding outage must not silently flip governance to ungoverned."""
+        graph = self._graph([self._weak_hit()], [])
+        cfg = EmbeddingConfig(fulltext_confidence_threshold=1.1, vector_min_score=0.77)
+        with patch("src.query.embeddings.get_embedding", return_value=[]):
+            result = disambiguate("whats the total customers", graph, embedding_config=cfg)
+        assert [h["score"] for h in result.metrics] == [0.457]
+
+    def test_vector_search_disabled_keeps_weak_hit(self):
+        graph = self._graph([self._weak_hit()], [])
+        cfg = EmbeddingConfig(
+            fulltext_confidence_threshold=1.1, vector_min_score=0.77, enabled=False
+        )
+        result = disambiguate("whats the total customers", graph, embedding_config=cfg)
+        assert [h["score"] for h in result.metrics] == [0.457]
 
 
 class TestMetricMatchThreshold:

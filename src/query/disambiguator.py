@@ -65,7 +65,9 @@ def disambiguate(
         if ft_query
         else []
     )
-    # Vector fallback: if full-text confidence is low, try semantic similarity
+    # Vector fallback: a full-text score below the confidence threshold is not
+    # trusted on its own, so the vector search arbitrates — it can either name a
+    # better metric or veto the weak keyword hit entirely.
     if embedding_config and embedding_config.enabled:
         best_ft_score = max((h.get("score", 0) for h in metric_hits), default=0)
         if best_ft_score < embedding_config.fulltext_confidence_threshold:
@@ -75,6 +77,9 @@ def disambiguate(
             question_vec = get_embedding(
                 question, embedding_config.model_id, embedding_config.dimensions
             )
+            # An empty vector means the embedding call failed, not that nothing
+            # matched. Keep the weak hits in that case: an infrastructure blip must
+            # not silently change whether a question is governed.
             if question_vec:
                 vector_hits = graph.query(
                     q.VECTOR_SEARCH_METRICS,
@@ -92,6 +97,20 @@ def disambiguate(
                         vector_hits[0].get("score", 0),
                     )
                     metric_hits = vector_hits
+                elif metric_hits:
+                    # Neither signal is confident. Answering from a metric that
+                    # cleared only the retrieval floor is how an unrelated question
+                    # gets a governed answer, so drop it and let the question fall
+                    # through to the ungoverned route.
+                    logger.info(
+                        "Discarding %d weak full-text metric hit(s) (best=%.3f < %s) "
+                        "with no vector match above %s — routing ungoverned",
+                        len(metric_hits),
+                        best_ft_score,
+                        embedding_config.fulltext_confidence_threshold,
+                        embedding_config.vector_min_score,
+                    )
+                    metric_hits = []
 
     result.metrics = metric_hits
 

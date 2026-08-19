@@ -641,14 +641,22 @@ async def similarity_test(request: SimilarityTestRequest):
         resolution = "none"
         selected = None
 
-    # The live router (disambiguate) governs a question whenever ANY metric clears
-    # metric_match_min_score — it has no notion of a "weak" match. Report that
-    # verdict separately so this page reflects real behaviour rather than implying
-    # a weak full-text hit would fall through to ungoverned SQL.
-    would_be_governed = bool(
-        (best_ft and best_ft.get("score", 0) > match_min)
-        or (best_vec and best_vec.get("score", 0) >= vec_min)
-    )
+    # Mirror the live router (disambiguate): a full-text hit above the confidence
+    # threshold governs outright. Below it the hit is only provisional and the vector
+    # search arbitrates — a vector match governs, no vector match vetoes the weak
+    # hit and the question goes ungoverned.
+    ft_candidate = best_ft.get("score", 0) if best_ft else 0
+    vec_best = best_vec.get("score", 0) if best_vec else 0
+    confident_ft = ft_candidate > match_min and ft_candidate >= ft_threshold
+    accepted_vec = vec_best > 0 and vec_best >= vec_min
+    if confident_ft or accepted_vec:
+        would_be_governed = True
+    elif not _config.embedding.enabled:
+        # With vector search off there is nothing to arbitrate, so the router keeps
+        # a weak full-text hit rather than dropping it.
+        would_be_governed = ft_candidate > match_min
+    else:
+        would_be_governed = False
 
     return {
         "question": request.question,
