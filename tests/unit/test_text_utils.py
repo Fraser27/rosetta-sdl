@@ -3,9 +3,38 @@
 from src.text_utils import (
     MAX_DESCRIPTION_WORDS,
     exceeds_word_limit,
+    strip_fulltext_stopwords,
     truncate_words,
     word_count,
 )
+
+
+class TestStripFulltextStopwords:
+    def test_keeps_content_words(self):
+        assert strip_fulltext_stopwords("what is the total revenue") == "total revenue"
+
+    def test_stopword_only_question_is_empty(self):
+        # The regression: "of the in a" scored 1.408 against return_rate purely
+        # because "of" appears in its definition.
+        assert strip_fulltext_stopwords("of the in a") == ""
+
+    def test_drops_of_from_customer_count_question(self):
+        assert strip_fulltext_stopwords("What are the number of customers ?") == "number customers"
+
+    def test_strips_lucene_operators(self):
+        # Quotes/operators are removed so a question is always a bag of content
+        # words — "AND" is itself a stopword, so no operator survives to Lucene.
+        assert strip_fulltext_stopwords('revenue AND "orders"') == "revenue orders"
+
+    def test_lone_operators_do_not_survive(self):
+        assert strip_fulltext_stopwords("+-!(){}[]^~*?:\\/") == ""
+
+    def test_empty_and_none(self):
+        assert strip_fulltext_stopwords("") == ""
+        assert strip_fulltext_stopwords(None) == ""  # type: ignore[arg-type]
+
+    def test_case_insensitive(self):
+        assert strip_fulltext_stopwords("THE Revenue OF orders") == "Revenue orders"
 
 
 class TestWordCount:

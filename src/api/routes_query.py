@@ -23,6 +23,7 @@ from src.query.firewall import SQLFirewall
 from src.query.generator import generate_sql
 from src.query.router import route_query
 from src.query.vectors_executor import search_vectors
+from src.text_utils import strip_fulltext_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -167,17 +168,19 @@ def _unapproved_metric_hint(question: str, graph: GraphClient) -> str | None:
     drops to ~0.18 as stopwords dilute the Lucene score; the vector path catches it.)
     """
     m = None
-    try:
-        hits = graph.query(
-            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-            "WHERE score > 0.3 AND COALESCE(node.status, 'approved') <> 'approved' "
-            "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
-            "ORDER BY score DESC LIMIT 1",
-            {"q": question},
-        )
-        m = hits[0] if hits else None
-    except Exception as e:
-        logger.debug("Unapproved-metric hint full-text lookup failed: %s", e)
+    ft_query = strip_fulltext_stopwords(question)
+    if ft_query:
+        try:
+            hits = graph.query(
+                "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+                "WHERE score > 0.3 AND COALESCE(node.status, 'approved') <> 'approved' "
+                "RETURN node.name AS name, COALESCE(node.status, 'approved') AS status "
+                "ORDER BY score DESC LIMIT 1",
+                {"q": ft_query},
+            )
+            m = hits[0] if hits else None
+        except Exception as e:
+            logger.debug("Unapproved-metric hint full-text lookup failed: %s", e)
 
     # Vector fallback — embed the question and kNN over metric embeddings, keeping
     # only non-approved matches above the configured similarity floor.
@@ -577,16 +580,21 @@ async def similarity_test(request: SimilarityTestRequest):
     """
     graph = _get_graph()
 
-    # Full-text search
-    fulltext_hits = graph.query(
-        "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-        "WHERE score > 0.1 "
-        "WITH node AS m, score "
-        "OPTIONAL MATCH (m)-[:MEASURES]->(t:Table) "
-        "RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition, "
-        "m.synonyms AS synonyms, COALESCE(t.full_name, '') AS source_table, score "
-        "ORDER BY score DESC LIMIT 10",
-        {"q": request.question},
+    # Full-text search over content words only, mirroring the live routing path.
+    ft_query = strip_fulltext_stopwords(request.question)
+    fulltext_hits = (
+        graph.query(
+            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+            "WHERE score > 0.1 "
+            "WITH node AS m, score "
+            "OPTIONAL MATCH (m)-[:MEASURES]->(t:Table) "
+            "RETURN m.metric_id AS metric_id, m.name AS name, m.definition AS definition, "
+            "m.synonyms AS synonyms, COALESCE(t.full_name, '') AS source_table, score "
+            "ORDER BY score DESC LIMIT 10",
+            {"q": ft_query},
+        )
+        if ft_query
+        else []
     )
 
     # Vector search (if enabled)
@@ -634,6 +642,7 @@ async def similarity_test(request: SimilarityTestRequest):
 
     return {
         "question": request.question,
+        "fulltext_query": ft_query,
         "fulltext_results": fulltext_hits,
         "vector_results": vector_hits,
         "resolution": resolution,

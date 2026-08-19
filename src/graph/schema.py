@@ -21,32 +21,41 @@ CONSTRAINTS = [
     "CREATE INDEX metric_version_lookup IF NOT EXISTS FOR (mv:MetricVersion) ON (mv.metric_id)",
 ]
 
-# Full-text indexes for search across node properties
+# Full-text indexes for search across node properties.
+#
+# All use the `english` analyzer rather than Neo4j's default
+# `standard-no-stop-words`, which indexes stopwords as ordinary terms. On a small
+# corpus that lets a stopword shared with one node's description dominate the
+# Lucene score and win routing outright. `english` also stems, so "returns"
+# matches "return". Query-side sanitisation in strip_fulltext_stopwords is the
+# belt to this braces — it protects deployments whose indexes predate this change.
+_FULLTEXT_ANALYZER = "OPTIONS {indexConfig: {`fulltext.analyzer`: 'english'}}"
+
 FULLTEXT_INDEXES = [
     (
         "table_search",
         "CREATE FULLTEXT INDEX table_search IF NOT EXISTS "
-        "FOR (t:Table) ON EACH [t.name, t.full_name, t.description]",
+        "FOR (t:Table) ON EACH [t.name, t.full_name, t.description] " + _FULLTEXT_ANALYZER,
     ),
     (
         "column_search",
         "CREATE FULLTEXT INDEX column_search IF NOT EXISTS "
-        "FOR (c:Column) ON EACH [c.name, c.description]",
+        "FOR (c:Column) ON EACH [c.name, c.description] " + _FULLTEXT_ANALYZER,
     ),
     (
         "metric_search",
         "CREATE FULLTEXT INDEX metric_search IF NOT EXISTS "
-        "FOR (m:Metric) ON EACH [m.name, m.definition, m.synonyms_text]",
+        "FOR (m:Metric) ON EACH [m.name, m.definition, m.synonyms_text] " + _FULLTEXT_ANALYZER,
     ),
     (
         "document_search",
         "CREATE FULLTEXT INDEX document_search IF NOT EXISTS "
-        "FOR (d:Document) ON EACH [d.name, d.description]",
+        "FOR (d:Document) ON EACH [d.name, d.description] " + _FULLTEXT_ANALYZER,
     ),
     (
         "business_term_search",
         "CREATE FULLTEXT INDEX business_term_search IF NOT EXISTS "
-        "FOR (bt:BusinessTerm) ON EACH [bt.name, bt.definition]",
+        "FOR (bt:BusinessTerm) ON EACH [bt.name, bt.definition] " + _FULLTEXT_ANALYZER,
     ),
 ]
 
@@ -76,6 +85,38 @@ VECTOR_INDEXES = [
 ]
 
 
+def _migrate_fulltext_analyzers(graph: GraphClient) -> None:
+    """Drop full-text indexes still using a non-`english` analyzer so they get rebuilt.
+
+    `CREATE ... IF NOT EXISTS` is a no-op against an existing index, including when
+    the analyzer differs, so an index created before the `english` switch would keep
+    its old stopword-preserving behaviour forever. Dropping is safe: the caller
+    recreates immediately, and full-text indexes are derived data rebuilt from nodes.
+    """
+    managed = {name for name, _ in FULLTEXT_INDEXES}
+    try:
+        existing = graph.query(
+            "SHOW FULLTEXT INDEXES YIELD name, options "
+            "RETURN name, options['indexConfig']['fulltext.analyzer'] AS analyzer"
+        )
+    except Exception as e:
+        logger.warning("Could not inspect full-text analyzers, skipping migration: %s", e)
+        return
+
+    for row in existing:
+        name = row.get("name")
+        if name in managed and row.get("analyzer") != "english":
+            try:
+                graph.write(f"DROP INDEX {name}")
+                logger.info(
+                    "Dropped index %s (analyzer=%s) for rebuild with 'english'",
+                    name,
+                    row.get("analyzer"),
+                )
+            except Exception as e:
+                logger.warning("Could not drop index %s for analyzer migration: %s", name, e)
+
+
 def init_schema(graph: GraphClient) -> None:
     """Create constraints and indexes if they don't exist."""
     for cypher in CONSTRAINTS:
@@ -83,6 +124,8 @@ def init_schema(graph: GraphClient) -> None:
             graph.write(cypher)
         except Exception as e:
             logger.warning("Constraint already exists or error: %s", e)
+
+    _migrate_fulltext_analyzers(graph)
 
     for name, cypher in FULLTEXT_INDEXES:
         try:

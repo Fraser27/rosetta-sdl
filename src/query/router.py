@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from src.config import EmbeddingConfig
 from src.graph.client import GraphClient
+from src.text_utils import strip_fulltext_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -72,33 +73,40 @@ def _search_all_indexes(
     """Search all full-text indexes and return combined results, with vector fallback."""
     all_hits: list[dict] = []
 
+    # Content words only — see strip_fulltext_stopwords. Empty means the question
+    # carried no searchable terms, so every full-text lookup is skipped and we go
+    # straight to the vector fallback.
+    ft_query = strip_fulltext_stopwords(question)
+
     # Search tables
-    try:
-        table_hits = graph.query(
-            "CALL db.index.fulltext.queryNodes('table_search', $q) YIELD node, score "
-            "WHERE score > $min "
-            "RETURN 'table' AS type, node.full_name AS id, node.name AS name, "
-            "node.description AS description, score "
-            "ORDER BY score DESC LIMIT 10",
-            {"q": question, "min": min_score},
-        )
-        all_hits.extend(table_hits)
-    except Exception as e:
-        logger.debug("Table search failed: %s", e)
+    if ft_query:
+        try:
+            table_hits = graph.query(
+                "CALL db.index.fulltext.queryNodes('table_search', $q) YIELD node, score "
+                "WHERE score > $min "
+                "RETURN 'table' AS type, node.full_name AS id, node.name AS name, "
+                "node.description AS description, score "
+                "ORDER BY score DESC LIMIT 10",
+                {"q": ft_query, "min": min_score},
+            )
+            all_hits.extend(table_hits)
+        except Exception as e:
+            logger.debug("Table search failed: %s", e)
 
     # Search metrics
-    try:
-        metric_hits = graph.query(
-            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-            "WHERE score > $min AND COALESCE(node.status, 'approved') = 'approved' "
-            "RETURN 'metric' AS type, node.metric_id AS id, node.name AS name, "
-            "node.definition AS description, score "
-            "ORDER BY score DESC LIMIT 10",
-            {"q": question, "min": min_score},
-        )
-        all_hits.extend(metric_hits)
-    except Exception as e:
-        logger.debug("Metric search failed: %s", e)
+    if ft_query:
+        try:
+            metric_hits = graph.query(
+                "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+                "WHERE score > $min AND COALESCE(node.status, 'approved') = 'approved' "
+                "RETURN 'metric' AS type, node.metric_id AS id, node.name AS name, "
+                "node.definition AS description, score "
+                "ORDER BY score DESC LIMIT 10",
+                {"q": ft_query, "min": min_score},
+            )
+            all_hits.extend(metric_hits)
+        except Exception as e:
+            logger.debug("Metric search failed: %s", e)
 
     # Vector fallback for metrics: if full-text confidence is low, try semantic similarity
     if embedding_config and embedding_config.enabled:
@@ -132,18 +140,19 @@ def _search_all_indexes(
                 logger.debug("Router vector fallback failed: %s", e)
 
     # Search documents
-    try:
-        doc_hits = graph.query(
-            "CALL db.index.fulltext.queryNodes('document_search', $q) YIELD node, score "
-            "WHERE score > $min "
-            "RETURN 'document' AS type, node.s3_key AS id, node.name AS name, "
-            "node.description AS description, score "
-            "ORDER BY score DESC LIMIT 10",
-            {"q": question, "min": min_score},
-        )
-        all_hits.extend(doc_hits)
-    except Exception as e:
-        logger.debug("Document search failed: %s", e)
+    if ft_query:
+        try:
+            doc_hits = graph.query(
+                "CALL db.index.fulltext.queryNodes('document_search', $q) YIELD node, score "
+                "WHERE score > $min "
+                "RETURN 'document' AS type, node.s3_key AS id, node.name AS name, "
+                "node.description AS description, score "
+                "ORDER BY score DESC LIMIT 10",
+                {"q": ft_query, "min": min_score},
+            )
+            all_hits.extend(doc_hits)
+        except Exception as e:
+            logger.debug("Document search failed: %s", e)
 
     # Vector fallback for documents: mirror the metric fallback. When full-text
     # document matching is weak, embed the question and kNN against uploaded

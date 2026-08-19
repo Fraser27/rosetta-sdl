@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from src.config import EmbeddingConfig
 from src.graph.client import GraphClient
+from src.text_utils import strip_fulltext_stopwords
 
 logger = logging.getLogger(__name__)
 
@@ -38,15 +39,23 @@ def disambiguate(
     # Governance gate: NL routing only serves APPROVED metrics (legacy metrics with
     # no status COALESCE to 'approved' for backward compatibility). Draft/deprecated
     # metrics are still directly queryable by id, just not surfaced to NL questions.
-    metric_hits = graph.query(
-        "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
-        "WHERE score > 0.3 AND COALESCE(node.status, 'approved') = 'approved' "
-        "WITH node AS m, score "
-        "MATCH (m)-[:MEASURES]->(t:Table) "
-        "RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression, "
-        "t.full_name AS source_table, score "
-        "ORDER BY score DESC LIMIT 5",
-        {"q": question},
+    # Content words only — see strip_fulltext_stopwords. Empty means no searchable
+    # terms, so full-text is skipped entirely and the vector fallback decides.
+    ft_query = strip_fulltext_stopwords(question)
+
+    metric_hits = (
+        graph.query(
+            "CALL db.index.fulltext.queryNodes('metric_search', $q) YIELD node, score "
+            "WHERE score > 0.3 AND COALESCE(node.status, 'approved') = 'approved' "
+            "WITH node AS m, score "
+            "MATCH (m)-[:MEASURES]->(t:Table) "
+            "RETURN m.metric_id AS metric_id, m.name AS name, m.expression AS expression, "
+            "t.full_name AS source_table, score "
+            "ORDER BY score DESC LIMIT 5",
+            {"q": ft_query},
+        )
+        if ft_query
+        else []
     )
     # Vector fallback: if full-text confidence is low, try semantic similarity
     if embedding_config and embedding_config.enabled:
@@ -82,22 +91,30 @@ def disambiguate(
     tables_from_metrics = {h["source_table"] for h in metric_hits if h.get("source_table")}
 
     # 2. Find matching tables directly
-    table_hits = graph.query(
-        "CALL db.index.fulltext.queryNodes('table_search', $q) YIELD node, score "
-        "WHERE score > 0.3 "
-        "RETURN node.full_name AS full_name, node.name AS name, score "
-        "ORDER BY score DESC LIMIT 5",
-        {"q": question},
+    table_hits = (
+        graph.query(
+            "CALL db.index.fulltext.queryNodes('table_search', $q) YIELD node, score "
+            "WHERE score > 0.3 "
+            "RETURN node.full_name AS full_name, node.name AS name, score "
+            "ORDER BY score DESC LIMIT 5",
+            {"q": ft_query},
+        )
+        if ft_query
+        else []
     )
     tables_from_search = {h["full_name"] for h in table_hits if h.get("full_name")}
 
     # 3. Find matching columns
-    column_hits = graph.query(
-        "CALL db.index.fulltext.queryNodes('column_search', $q) YIELD node, score "
-        "WHERE score > 0.3 "
-        "RETURN node.name AS name, node.table AS table, score "
-        "ORDER BY score DESC LIMIT 10",
-        {"q": question},
+    column_hits = (
+        graph.query(
+            "CALL db.index.fulltext.queryNodes('column_search', $q) YIELD node, score "
+            "WHERE score > 0.3 "
+            "RETURN node.name AS name, node.table AS table, score "
+            "ORDER BY score DESC LIMIT 10",
+            {"q": ft_query},
+        )
+        if ft_query
+        else []
     )
     for ch in column_hits:
         table = ch.get("table", "")

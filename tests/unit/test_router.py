@@ -59,3 +59,22 @@ class TestQueryRouter:
         graph = _make_graph()
         result = route_query("something random", graph)
         assert result.route == "structured"
+
+
+class TestStopwordSanitisation:
+    def test_stopword_only_question_skips_fulltext_entirely(self):
+        graph = _make_graph(
+            metric_hits=[{"type": "metric", "id": "m_008", "name": "return_rate", "description": "", "score": 1.408}],
+        )
+        result = route_query("of the in a", graph)
+        assert result.matched_metrics == []
+        graph.query.assert_not_called()
+
+    def test_searches_with_content_words_only(self):
+        graph = _make_graph(
+            metric_hits=[{"type": "metric", "id": "m_001", "name": "total_revenue", "description": "", "score": 2.0}],
+        )
+        route_query("what is the total revenue", graph)
+        sent = [c.args[1]["q"] for c in graph.query.call_args_list]
+        assert sent, "expected full-text lookups to run"
+        assert all(q == "total revenue" for q in sent)
